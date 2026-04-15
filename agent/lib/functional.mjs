@@ -90,9 +90,10 @@ function buildTestSuite(screen) {
       throw new Error("No search input found");
     },
     validate: async (page) => {
-      const val = await page.evaluate(() =>
-        (document.querySelector('input[type="search"], .ant-input, input[type="text"]') as HTMLInputElement)?.value
-      );
+      const val = await page.evaluate(() => {
+        const el = document.querySelector('input[type="search"], .ant-input, input[type="text"]');
+        return el ? el.value : null;
+      });
       return val?.includes("test")
         ? { passed: true }
         : { passed: false, reason: "Search input value not retained" };
@@ -144,7 +145,7 @@ function buildTestSuite(screen) {
       );
       await th.click();
       await page.waitForTimeout(800);
-      (page as any)._sortBefore = before;
+      page._sortBefore = before;
     },
     validate: async (page) => {
       const after = await page.evaluate(() =>
@@ -154,7 +155,7 @@ function buildTestSuite(screen) {
       const ariaSort = await page.evaluate(() =>
         document.querySelector("th[aria-sort]")?.getAttribute("aria-sort")
       );
-      return ariaSort || JSON.stringify(after) !== JSON.stringify((page as any)._sortBefore)
+      return ariaSort || JSON.stringify(after) !== JSON.stringify(page._sortBefore)
         ? { passed: true }
         : { passed: false, reason: "Sort did not change row order or aria-sort attribute" };
     },

@@ -174,7 +174,7 @@ export async function runPrdCompliance(screens, prdStructure, sessionPath, confi
 
       const links = await page.evaluate(() =>
         Array.from(document.querySelectorAll("a[href]"))
-          .map((a) => ({ href: (a as HTMLAnchorElement).href, text: a.textContent?.trim() ?? "" }))
+          .map((a) => ({ href: a.href, text: a.textContent ? a.textContent.trim() : "" }))
           .filter((l) => l.href.startsWith(window.location.origin))
           .slice(0, 20)
       );

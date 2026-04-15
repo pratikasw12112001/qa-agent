@@ -6,8 +6,7 @@
 
 import { launchBrowser, newContext } from "./browser.mjs";
 import { createRequire } from "module";
-import { readFileSync, existsSync } from "fs";
-import { resolve } from "path";
+import { readFileSync } from "fs";
 
 const require = createRequire(import.meta.url);
 
@@ -16,7 +15,6 @@ async function getAxeSource() {
     const axePath = require.resolve("axe-core/axe.min.js");
     return readFileSync(axePath, "utf8");
   } catch {
-    // Fallback: minimal axe-core check via built-in browser APIs
     return null;
   }
 }
@@ -51,13 +49,13 @@ export async function checkAccessibility(url, sessionPath) {
     if (axeSource) {
       await page.evaluate(axeSource);
       axeResults = await page.evaluate(async () => {
-        return await (window as any).axe.run(document, {
+        return await window.axe.run(document, {
           runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] },
         });
       });
     }
 
-    // Manual checks (always run, regardless of axe)
+    // Manual WCAG checks
     const manual = await page.evaluate(() => {
       const issues = [];
 
@@ -76,10 +74,10 @@ export async function checkAccessibility(url, sessionPath) {
 
       // 2. Form inputs without labels
       document.querySelectorAll("input, textarea, select").forEach((input) => {
-        const id = (input as HTMLElement).id;
-        const hasLabel = id && document.querySelector(`label[for="${id}"]`);
+        const id = input.id;
+        const hasLabel = id && document.querySelector('label[for="' + id + '"]');
         const hasAriaLabel = input.getAttribute("aria-label") || input.getAttribute("aria-labelledby");
-        const hasPlaceholder = (input as HTMLInputElement).placeholder;
+        const hasPlaceholder = input.placeholder;
         if (!hasLabel && !hasAriaLabel && !hasPlaceholder) {
           issues.push({
             type: "missing-label",
@@ -93,36 +91,36 @@ export async function checkAccessibility(url, sessionPath) {
 
       // 3. Buttons with no accessible name
       document.querySelectorAll("button, [role='button']").forEach((btn) => {
-        const text = (btn as HTMLElement).textContent?.trim();
+        const text = btn.textContent && btn.textContent.trim();
         const ariaLabel = btn.getAttribute("aria-label");
         const ariaLabelledby = btn.getAttribute("aria-labelledby");
         if (!text && !ariaLabel && !ariaLabelledby) {
           issues.push({
             type: "empty-button",
             severity: "error",
-            element: (btn as HTMLElement).outerHTML.slice(0, 100),
+            element: btn.outerHTML.slice(0, 100),
             description: "Button has no accessible name",
             wcag: "4.1.2",
           });
         }
       });
 
-      // 4. Color contrast (spot check on text elements)
+      // 4. Color contrast spot check
       const contrastIssues = [];
       const textEls = Array.from(document.querySelectorAll("p, span, td, th, label, button, h1, h2, h3"));
       for (const el of textEls.slice(0, 20)) {
-        const cs = window.getComputedStyle(el as HTMLElement);
+        const cs = window.getComputedStyle(el);
         const color = cs.color;
         const bg = cs.backgroundColor;
         if (color && bg && color !== "rgba(0, 0, 0, 0)" && bg !== "rgba(0, 0, 0, 0)") {
-          const parseRGB = (str: string) => {
+          const parseRGB = (str) => {
             const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
             return m ? [+m[1], +m[2], +m[3]] : null;
           };
-          const toL = (rgb: number[]) => {
+          const toL = (rgb) => {
             const [r, g, b] = rgb.map((v) => {
               v /= 255;
-              return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+              return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
             });
             return 0.2126 * r + 0.7152 * g + 0.0722 * b;
           };
@@ -140,8 +138,8 @@ export async function checkAccessibility(url, sessionPath) {
               contrastIssues.push({
                 type: "contrast",
                 severity: "error",
-                element: (el as HTMLElement).outerHTML.slice(0, 80),
-                description: `Contrast ratio ${ratio.toFixed(2)}:1 below WCAG AA minimum ${required}:1`,
+                element: el.outerHTML.slice(0, 80),
+                description: "Contrast ratio " + ratio.toFixed(2) + ":1 below WCAG AA minimum " + required + ":1",
                 wcag: "1.4.3",
                 detail: { ratio: ratio.toFixed(2), required, color, background: bg },
               });
@@ -164,7 +162,7 @@ export async function checkAccessibility(url, sessionPath) {
 
       // 6. Skip link
       const firstLink = document.querySelector("a");
-      if (firstLink && !firstLink.href?.includes("#")) {
+      if (firstLink && firstLink.href && !firstLink.href.includes("#")) {
         issues.push({
           type: "no-skip-link",
           severity: "warn",
@@ -184,7 +182,7 @@ export async function checkAccessibility(url, sessionPath) {
           type: violation.id,
           severity: violation.impact === "critical" || violation.impact === "serious" ? "error" : "warn",
           description: violation.description,
-          wcag: violation.tags?.find((t: string) => t.startsWith("wcag"))?.toUpperCase() ?? "",
+          wcag: (violation.tags || []).find((t) => t.startsWith("wcag"))?.toUpperCase() ?? "",
           element: violation.nodes?.[0]?.html?.slice(0, 100) ?? "",
           detail: { impact: violation.impact, help: violation.help },
         });
@@ -223,32 +221,28 @@ export async function checkResponsiveness(url, sessionPath) {
 
       const issues = await page.evaluate(() => {
         const problems = [];
-        const body = document.body;
-        const bodyWidth = body.scrollWidth;
+        const bodyWidth = document.body.scrollWidth;
         const windowWidth = window.innerWidth;
 
-        // Horizontal overflow
         if (bodyWidth > windowWidth + 2) {
           problems.push({
             type: "horizontal-overflow",
             severity: "error",
-            description: `Page overflows horizontally by ${bodyWidth - windowWidth}px`,
+            description: "Page overflows horizontally by " + (bodyWidth - windowWidth) + "px",
           });
         }
 
-        // Elements wider than viewport
         document.querySelectorAll("*").forEach((el) => {
           const r = el.getBoundingClientRect();
           if (r.right > windowWidth + 10 && r.width > 50) {
             problems.push({
               type: "element-overflow",
               severity: "warn",
-              description: `Element overflows viewport: ${(el as HTMLElement).tagName}.${(el as HTMLElement).className?.toString().slice(0, 30)}`,
+              description: "Element overflows viewport: " + el.tagName + "." + (el.className ? el.className.toString().slice(0, 30) : ""),
             });
           }
         });
 
-        // Touch targets too small (mobile only)
         if (window.innerWidth <= 768) {
           document.querySelectorAll("button, a, [role='button']").forEach((el) => {
             const r = el.getBoundingClientRect();
@@ -256,7 +250,7 @@ export async function checkResponsiveness(url, sessionPath) {
               problems.push({
                 type: "small-touch-target",
                 severity: "warn",
-                description: `Touch target ${Math.round(r.width)}×${Math.round(r.height)}px — should be ≥44×44px`,
+                description: "Touch target " + Math.round(r.width) + "x" + Math.round(r.height) + "px — should be >=44x44px",
               });
             }
           });
@@ -288,37 +282,36 @@ export async function checkPerformance(url, sessionPath) {
     const context = await newContext(browser, sessionPath);
     const page = await context.newPage();
 
+    const consoleErrors = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+
     const start = Date.now();
     await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
     const loadMs = Date.now() - start;
 
     const metrics = await page.evaluate(() => {
-      const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming;
+      const navEntries = performance.getEntriesByType("navigation");
+      const nav = navEntries[0] || null;
       const paint = performance.getEntriesByType("paint");
-      const lcp = performance.getEntriesByType("largest-contentful-paint") as any[];
-      const cls = performance.getEntriesByType("layout-shift") as any[];
+      const lcpEntries = performance.getEntriesByType("largest-contentful-paint");
+      const clsEntries = performance.getEntriesByType("layout-shift");
       return {
         ttfb: nav ? Math.round(nav.responseStart - nav.requestStart) : null,
-        fcp: Math.round(paint.find((p) => p.name === "first-contentful-paint")?.startTime ?? 0),
-        lcp: Math.round(lcp[lcp.length - 1]?.startTime ?? 0),
-        cls: parseFloat(cls.reduce((s, e) => s + e.value, 0).toFixed(4)),
+        fcp: Math.round((paint.find((p) => p.name === "first-contentful-paint") || { startTime: 0 }).startTime),
+        lcp: Math.round((lcpEntries[lcpEntries.length - 1] || { startTime: 0 }).startTime),
+        cls: parseFloat(clsEntries.reduce((s, e) => s + e.value, 0).toFixed(4)),
         domInteractive: nav ? Math.round(nav.domInteractive - nav.startTime) : null,
         totalRequests: performance.getEntriesByType("resource").length,
       };
     });
 
-    // Broken images
     const brokenImages = await page.evaluate(() =>
       Array.from(document.querySelectorAll("img"))
         .filter((img) => !img.complete || img.naturalWidth === 0)
         .map((img) => img.src).slice(0, 10)
     );
-
-    // Console errors already captured in captureScreen; re-collect here
-    const consoleErrors: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error") consoleErrors.push(msg.text());
-    });
 
     await context.close();
 
@@ -364,7 +357,7 @@ export async function checkStates(url, sessionPath) {
         const hoverShot = await p2.screenshot({ type: "png" });
         states.push({ name: "Hover (first button)", screenshot: hoverShot.toString("base64"), issues: [] });
       }
-    } catch {}
+    } catch { /* hover optional */ }
     await ctx2.close();
 
     // 3. Loading state — simulate slow network
@@ -374,12 +367,12 @@ export async function checkStates(url, sessionPath) {
     const cdp = await ctx3.newCDPSession(p3);
     await cdp.send("Network.emulateNetworkConditions", {
       offline: false,
-      downloadThroughput: 50000, // 50kbps
+      downloadThroughput: 50000,
       uploadThroughput: 50000,
       latency: 1000,
     });
     p3.goto(url, { waitUntil: "commit", timeout: 10000 }).catch(() => {});
-    await p3.waitForTimeout(800); // capture mid-load
+    await p3.waitForTimeout(800);
     const loadShot = await p3.screenshot({ type: "png" });
     states.push({ name: "Loading (slow network)", screenshot: loadShot.toString("base64"), issues: [] });
     await ctx3.close();
@@ -397,7 +390,7 @@ export async function checkStates(url, sessionPath) {
         const emptyShot = await p4.screenshot({ type: "png" });
         const emptyState = await p4.evaluate(() => {
           const el = document.querySelector(".ant-empty, [class*='empty'], [class*='no-data']");
-          return el ? el.textContent?.trim() : null;
+          return el ? el.textContent && el.textContent.trim() : null;
         });
         states.push({
           name: "Empty search results",
@@ -405,7 +398,7 @@ export async function checkStates(url, sessionPath) {
           issues: emptyState ? [] : [{ type: "no-empty-state", severity: "warn", description: "No empty state UI found for zero results" }],
         });
       }
-    } catch {}
+    } catch { /* search optional */ }
     await ctx4.close();
 
   } finally {
