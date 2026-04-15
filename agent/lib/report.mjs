@@ -28,14 +28,17 @@ function calcScore(findings) {
   const warns  = findings.filter((f) => f.severity === "warn").length;
   const passes = findings.filter((f) => f.severity === "pass").length;
   const total  = errors + warns + passes;
-  const score  = total === 0 ? 100 : Math.max(0, Math.round(100 - ((errors * 3 + warns) / (total || 1)) * 100));
-  return { score, errors, warns, passes };
+  // total === 0 means no comparisons ran at all — not a perfect score, it's "no data"
+  if (total === 0) return { score: 0, errors: 0, warns: 0, passes: 0, noData: true };
+  const score = Math.max(0, Math.round(100 - ((errors * 3 + warns) / total) * 100));
+  return { score, errors, warns, passes, noData: false };
 }
 
 export function generateReport(runData) {
   const { runId, screens, meta, prd } = runData;
   const allFindings = screens.flatMap((s) => s.phase1?.findings ?? []);
-  const { score, errors, warns, passes } = calcScore(allFindings);
+  const { score, errors, warns, passes, noData } = calcScore(allFindings);
+  const scoreDisplay = noData ? "N/A" : `${score}%`;
 
   const screenTabs = screens.map((s, i) =>
     `<button class="tab-btn ${i === 0 ? "active" : ""}" onclick="showScreen(${i})">${esc(s.name)}</button>`
@@ -54,7 +57,7 @@ export function generateReport(runData) {
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;line-height:1.5}
 a{color:#60a5fa}
 .header{background:#161b27;border-bottom:1px solid #1e2640;padding:20px 32px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}
-.header-score{font-size:52px;font-weight:800;color:${scoreColor(score)};line-height:1}
+.header-score{font-size:52px;font-weight:800;color:${noData ? "#64748b" : scoreColor(score)};line-height:1}
 .header-meta h1{font-size:18px;font-weight:700}
 .header-meta p{font-size:12px;color:#64748b;margin-top:3px}
 .meta-chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
@@ -141,7 +144,7 @@ a{color:#60a5fa}
 <body>
 
 <div class="header">
-  <div class="header-score">${score}<span style="font-size:24px;color:#64748b">%</span></div>
+  <div class="header-score">${scoreDisplay}<span style="font-size:24px;color:#64748b">${noData ? "" : ""}</span></div>
   <div class="header-meta">
     <h1>Frontend QA Report</h1>
     <p>${new Date().toLocaleString()}</p>
@@ -150,13 +153,14 @@ a{color:#60a5fa}
       <span class="chip">Figma: ${esc(meta.figmaFileKey ?? "—")}</span>
       <span class="chip">${screens.length} screens</span>
       <span class="chip">${errors} errors · ${warns} warnings</span>
+      ${noData ? `<span class="chip" style="color:#f59e0b;border-color:#f59e0b">⚠ No visual comparisons ran</span>` : ""}
     </div>
   </div>
   <button class="share-btn" onclick="copyShareLink()">🔗 Copy Share Link</button>
 </div>
 
 <div class="summary">
-  <div class="stat-card"><h3>Overall Score</h3><div class="stat-num" style="color:${scoreColor(score)}">${score}%</div><div class="stat-label">across all phases</div></div>
+  <div class="stat-card"><h3>Overall Score</h3><div class="stat-num" style="color:${noData ? "#64748b" : scoreColor(score)}">${scoreDisplay}</div><div class="stat-label">${noData ? "no comparisons ran" : "across all phases"}</div></div>
   <div class="stat-card"><h3>Errors</h3><div class="stat-num" style="color:#ef4444">${errors}</div><div class="stat-label">must fix</div></div>
   <div class="stat-card"><h3>Warnings</h3><div class="stat-num" style="color:#f59e0b">${warns}</div><div class="stat-label">should fix</div></div>
   <div class="stat-card"><h3>Passes</h3><div class="stat-num" style="color:#22c55e">${passes}</div><div class="stat-label">looking good</div></div>

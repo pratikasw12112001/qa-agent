@@ -230,6 +230,22 @@ async function runPhase1(screen, fileKey, config) {
   const thresholds = loadThresholds();
   const findings = [];
 
+  const matchedCount = pairs.filter(p => p.liveElement !== null).length;
+  const totalNodes   = pairs.length;
+
+  // If nothing matched at all, emit a warning so the score isn't vacuously 100 %
+  if (matchedCount === 0 && totalNodes > 0) {
+    findings.push({
+      category: "match", severity: "warn",
+      figmaNodeId: null, figmaNodeName: null, selector: null,
+      property: "frame-match",
+      figmaValue: `${totalNodes} design nodes`,
+      liveValue: "0 DOM elements matched",
+      delta: "0 / " + totalNodes,
+      description: `None of the ${totalNodes} Figma nodes could be matched to DOM elements — the selected Figma frame may not correspond to this page`,
+    });
+  }
+
   for (const { figmaNode, liveElement } of pairs) {
     if (!liveElement) {
       if (figmaNode.text && figmaNode.text.length > 2) {

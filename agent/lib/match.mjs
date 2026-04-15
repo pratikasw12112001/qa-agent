@@ -11,16 +11,40 @@ const MAX_SCREENS = 8; // test at most 8 screens per run
 // ─── Frame → Route Matching ───────────────────────────────────────────────────
 
 /**
- * Crawl the live app to discover real routes, then match each route
+ * If the user gave a specific-path URL (e.g. /logbook), use it directly.
+ * Otherwise crawl the app to discover routes, then match each route
  * to the best Figma frame by name similarity.
- * Only returns pairs where a genuine match exists.
  */
 export async function matchFramesToRoutes(frames, baseUrl, sessionPath) {
-  // Step 1: discover real routes in the live app
-  const routes = await discoverRoutes(baseUrl, sessionPath);
-  console.log(`   Discovered ${routes.length} real routes in the live app`);
+  let routes;
 
-  // Step 2: for each route, find the best Figma frame
+  const urlObj = new URL(baseUrl);
+  const isSpecificPath = urlObj.pathname !== "/" && urlObj.pathname !== "";
+
+  if (isSpecificPath) {
+    // User gave a specific page URL — crawl starting from it, prioritise sub-routes
+    console.log(`   Specific URL provided — crawling from: ${baseUrl}`);
+    const allRoutes = await discoverRoutes(baseUrl, sessionPath);
+    // Keep routes that are sub-paths of the provided URL first, then others
+    const subPath = urlObj.pathname.replace(/\/$/, "");
+    routes = [
+      ...allRoutes.filter(r => {
+        try { return new URL(r.url).pathname.startsWith(subPath); } catch { return false; }
+      }),
+      ...allRoutes.filter(r => {
+        try { return !new URL(r.url).pathname.startsWith(subPath); } catch { return false; }
+      }),
+    ];
+    console.log(`   Found ${routes.length} routes (${routes.filter(r => {
+      try { return new URL(r.url).pathname.startsWith(subPath); } catch { return false; }
+    }).length} under ${subPath})`);
+  } else {
+    // Base domain — crawl to discover all routes
+    routes = await discoverRoutes(baseUrl, sessionPath);
+    console.log(`   Discovered ${routes.length} real routes in the live app`);
+  }
+
+  // For each route, find the best matching Figma frame
   const matched = [];
   const usedFrameIds = new Set();
 
@@ -37,7 +61,10 @@ export async function matchFramesToRoutes(frames, baseUrl, sessionPath) {
       }
     }
 
-    if (best && bestScore >= 0.35) {
+    // Lower threshold for specific URLs — user explicitly targeted this page
+    const threshold = isSpecificPath ? 0.1 : 0.35;
+
+    if (best && bestScore >= threshold) {
       usedFrameIds.add(best.id);
       matched.push({ ...best, url: route.url, matchScore: bestScore });
       console.log(`   [${bestScore.toFixed(2)}] "${best.name}" → ${route.url}`);
@@ -46,15 +73,23 @@ export async function matchFramesToRoutes(frames, baseUrl, sessionPath) {
     if (matched.length >= MAX_SCREENS) break;
   }
 
-  // If we got nothing, fall back: use the base URL with the top frame
+  // Fallback: use the provided URL with the single best-named frame
   if (matched.length === 0 && frames.length > 0) {
-    const top = frames[0];
-    console.log(`   No route matches found — using base URL with first frame`);
-    matched.push({ ...top, url: baseUrl, matchScore: 0 });
+    // Pick the frame whose name best matches the URL slug (any score)
+    const slug = normalize(urlSlug(baseUrl));
+    let top = frames[0];
+    let topScore = 0;
+    for (const f of frames) {
+      const s = similarity(normalize(f.name), slug);
+      if (s > topScore) { topScore = s; top = f; }
+    }
+    console.log(`   No route matches — falling back to best frame "${top.name}" at ${baseUrl}`);
+    matched.push({ ...top, url: baseUrl, matchScore: topScore });
   }
 
   return matched;
 }
+
 
 /** Crawl the live app and collect all unique internal routes (SPA-aware) */
 async function discoverRoutes(baseUrl, sessionPath) {
