@@ -6,87 +6,171 @@
 
 import { launchBrowser, newContext } from "./browser.mjs";
 
+const MAX_SCREENS = 8; // test at most 8 screens per run
+
 // ─── Frame → Route Matching ───────────────────────────────────────────────────
 
 /**
- * For each Figma frame, find the best matching live URL.
- * Strategy:
- *   1. Collect all internal navigation links from the live app
- *   2. Score each frame name against each link text / href slug
- *   3. If no match, construct URL from frame name (slug fallback)
+ * Crawl the live app to discover real routes, then match each route
+ * to the best Figma frame by name similarity.
+ * Only returns pairs where a genuine match exists.
  */
 export async function matchFramesToRoutes(frames, baseUrl, sessionPath) {
+  // Step 1: discover real routes in the live app
+  const routes = await discoverRoutes(baseUrl, sessionPath);
+  console.log(`   Discovered ${routes.length} real routes in the live app`);
+
+  // Step 2: for each route, find the best Figma frame
+  const matched = [];
+  const usedFrameIds = new Set();
+
+  for (const route of routes) {
+    let best = null;
+    let bestScore = 0;
+
+    for (const frame of frames) {
+      if (usedFrameIds.has(frame.id)) continue;
+      const score = routeFrameScore(route, frame);
+      if (score > bestScore) {
+        bestScore = score;
+        best = frame;
+      }
+    }
+
+    if (best && bestScore >= 0.35) {
+      usedFrameIds.add(best.id);
+      matched.push({ ...best, url: route.url, matchScore: bestScore });
+      console.log(`   [${bestScore.toFixed(2)}] "${best.name}" → ${route.url}`);
+    }
+
+    if (matched.length >= MAX_SCREENS) break;
+  }
+
+  // If we got nothing, fall back: use the base URL with the top frame
+  if (matched.length === 0 && frames.length > 0) {
+    const top = frames[0];
+    console.log(`   No route matches found — using base URL with first frame`);
+    matched.push({ ...top, url: baseUrl, matchScore: 0 });
+  }
+
+  return matched;
+}
+
+/** Crawl the live app and collect all unique internal routes */
+async function discoverRoutes(baseUrl, sessionPath) {
   const browser = await launchBrowser(true);
-  let navLinks = [];
+  const routes = [];
+  const origin = new URL(baseUrl).origin;
 
   try {
     const context = await newContext(browser, sessionPath);
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 30000 });
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2000);
 
-    navLinks = await page.evaluate(() =>
-      Array.from(document.querySelectorAll("a[href], [role='menuitem']")).map((el) => ({
-        href: el.href ?? el.getAttribute("data-href") ?? "",
-        text: el.textContent?.trim() ?? "",
-      })).filter((l) => l.href && l.href.startsWith(window.location.origin))
-    );
+    // Collect links + page title from the root page
+    const rootLinks = await page.evaluate(() => {
+      const links = [];
+      document.querySelectorAll("a[href]").forEach((a) => {
+        if (a.href && a.href.startsWith(window.location.origin)) {
+          links.push({
+            url: a.href.split("?")[0].split("#")[0],
+            text: a.textContent ? a.textContent.trim() : "",
+          });
+        }
+      });
+      // Also check sidebar/nav items
+      document.querySelectorAll(
+        "[role='menuitem'], .ant-menu-item, .ant-menu-submenu-title, nav a, sidebar a, .sidebar a"
+      ).forEach((el) => {
+        const href = el.href || el.getAttribute("data-href") || "";
+        if (href && href.startsWith(window.location.origin)) {
+          links.push({
+            url: href.split("?")[0].split("#")[0],
+            text: el.textContent ? el.textContent.trim() : "",
+          });
+        }
+      });
+      return links;
+    });
+
+    // Add root page itself
+    routes.push({ url: baseUrl, text: await page.title() });
+
+    // Deduplicate and add discovered links
+    const seen = new Set([baseUrl]);
+    for (const link of rootLinks) {
+      if (!seen.has(link.url) && link.url.startsWith(origin) && link.url !== baseUrl) {
+        seen.add(link.url);
+        routes.push(link);
+      }
+    }
+
+    // Visit each link to get page title for better matching
+    for (const route of routes.slice(1, 20)) {
+      try {
+        await page.goto(route.url, { waitUntil: "domcontentloaded", timeout: 15000 });
+        await page.waitForTimeout(500);
+        route.title = await page.title();
+        // Also collect h1/h2 heading text
+        route.heading = await page.evaluate(() => {
+          const h = document.querySelector("h1, h2, .ant-page-header-heading-title");
+          return h ? h.textContent.trim() : "";
+        });
+      } catch {
+        // skip if navigation fails
+      }
+    }
+
     await context.close();
   } finally {
     await browser.close();
   }
 
-  return frames.map((frame) => {
-    const url = findBestUrl(frame.name, navLinks, baseUrl);
-    return { ...frame, url };
-  });
+  return routes;
 }
 
-function findBestUrl(frameName, navLinks, baseUrl) {
-  let best = null;
-  let bestScore = 0;
+/** Score how well a live route matches a Figma frame */
+function routeFrameScore(route, frame) {
+  const frameName = normalize(frame.name);
+  const framePage = normalize(frame.page ?? "");
 
-  const normalizedFrame = normalize(frameName);
+  // Things to compare against
+  const candidates = [
+    normalize(route.text ?? ""),
+    normalize(route.title ?? ""),
+    normalize(route.heading ?? ""),
+    normalize(urlSlug(route.url)),
+  ].filter(Boolean);
 
-  for (const link of navLinks) {
-    // Score against link text
-    const textScore = similarity(normalizedFrame, normalize(link.text));
-    // Score against URL slug
-    const slug = link.href.replace(/.*\//, "").replace(/-/g, " ");
-    const slugScore = similarity(normalizedFrame, slug);
-    const score = Math.max(textScore, slugScore);
-
-    if (score > bestScore && score > 0.4) {
-      bestScore = score;
-      best = link.href;
+  let best = 0;
+  for (const candidate of candidates) {
+    const s = similarity(frameName, candidate);
+    if (s > best) best = s;
+    // Also try page name vs candidate
+    if (framePage) {
+      const sp = similarity(framePage, candidate);
+      if (sp > best) best = sp;
     }
   }
-
-  // Fallback: construct URL from frame name
-  if (!best) {
-    const slug = frameName
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, "")
-      .trim()
-      .replace(/\s+/g, "-");
-    best = `${baseUrl.replace(/\/$/, "")}/${slug}`;
-  }
-
   return best;
+}
+
+function urlSlug(url) {
+  try {
+    const path = new URL(url).pathname;
+    return path.replace(/\//g, " ").replace(/-/g, " ").trim();
+  } catch {
+    return url;
+  }
 }
 
 // ─── Node → Element Matching ─────────────────────────────────────────────────
 
-/**
- * For each Figma node, find the best matching live DOM element.
- * Returns array of { figmaNode, liveElement, score } pairs.
- * Unmatched Figma nodes have liveElement = null.
- */
 export function matchNodesToElements(figmaNodes, liveElements, frameWidth, frameHeight) {
   const pairs = [];
   const usedLiveIds = new Set();
 
-  // Only try to match nodes that are directly useful for style comparison
   const matchableNodes = figmaNodes.filter(
     (n) => n.bbox.w > 10 && n.bbox.h > 10 &&
     !["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "ELLIPSE"].includes(n.type)
@@ -96,7 +180,6 @@ export function matchNodesToElements(figmaNodes, liveElements, frameWidth, frame
     let bestEl = null;
     let bestScore = 0;
 
-    // Normalize figma position to 0–1 range relative to frame
     const fxRel = figmaNode.bbox.x / frameWidth;
     const fyRel = figmaNode.bbox.y / frameHeight;
     const fwRel = figmaNode.bbox.w / frameWidth;
@@ -121,7 +204,6 @@ export function matchNodesToElements(figmaNodes, liveElements, frameWidth, frame
     }
   }
 
-  // Unmatched live elements (present in live but not in Figma)
   const unmatched = liveElements.filter(
     (el) => !usedLiveIds.has(`${el.bbox.x},${el.bbox.y}`)
   );
@@ -132,19 +214,16 @@ export function matchNodesToElements(figmaNodes, liveElements, frameWidth, frame
 function matchScore(figmaNode, fxRel, fyRel, fwRel, fhRel, liveEl, frameWidth, frameHeight) {
   const scores = [];
 
-  // 1. Text similarity (weight: 0.5)
   if (figmaNode.text && liveEl.text) {
     const textSim = similarity(normalize(figmaNode.text), normalize(liveEl.text));
     scores.push({ w: 0.5, v: textSim });
   }
 
-  // 2. Position similarity (weight: 0.3)
   const lxRel = liveEl.bbox.x / frameWidth;
   const lyRel = liveEl.bbox.y / frameHeight;
   const posSim = 1 - Math.min(1, Math.sqrt((fxRel - lxRel) ** 2 + (fyRel - lyRel) ** 2) * 3);
   scores.push({ w: 0.3, v: Math.max(0, posSim) });
 
-  // 3. Size similarity (weight: 0.2)
   const lwRel = liveEl.bbox.w / frameWidth;
   const lhRel = liveEl.bbox.h / frameHeight;
   const sizeSim = 1 - Math.min(1, (Math.abs(fwRel - lwRel) + Math.abs(fhRel - lhRel)) * 2);
@@ -169,7 +248,6 @@ function similarity(a, b) {
   if (a === b) return 1;
   if (a.includes(b) || b.includes(a)) return 0.8;
 
-  // Bigram similarity
   const bigrams = (s) => {
     const set = new Set();
     for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));

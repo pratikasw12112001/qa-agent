@@ -30,6 +30,8 @@ export async function detectFrames(figmaFileUrl, token) {
   for (const page of data.document.children ?? []) {
     for (const node of page.children ?? []) {
       if (node.type === "FRAME" && node.visible !== false) {
+        // Skip auto-named frames like "Frame 1234" — they are not real screens
+        if (/^frame\s*\d+$/i.test(node.name.trim())) continue;
         frames.push({
           id: node.id,
           name: node.name,
