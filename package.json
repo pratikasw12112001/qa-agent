@@ -1,0 +1,9 @@
+{
+  "name": "frontend-qa-agent",
+  "private": true,
+  "scripts": {
+    "dev": "cd web && npm run dev",
+    "agent": "cd agent && node agent.mjs",
+    "install:all": "cd agent && npm install && cd ../web && npm install"
+  }
+}

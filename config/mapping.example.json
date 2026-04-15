@@ -1,0 +1,32 @@
+{
+  "_comment": "Map Figma node IDs to CSS selectors in the live app. Copy to mapping.json and fill in your values.",
+  "mappings": [
+    {
+      "figmaNodeId": "1:23",
+      "figmaNodeName": "Hero Section",
+      "selector": "[data-testid='hero']",
+      "description": "Landing page hero banner"
+    },
+    {
+      "figmaNodeId": "1:45",
+      "figmaNodeName": "Nav / Primary",
+      "selector": "nav[role='navigation']",
+      "description": "Top navigation bar"
+    },
+    {
+      "figmaNodeId": "2:10",
+      "figmaNodeName": "Button / Primary",
+      "selector": ".btn-primary",
+      "description": "Primary CTA button",
+      "checkContent": true,
+      "expectedText": "Get Started"
+    },
+    {
+      "figmaNodeId": "2:30",
+      "figmaNodeName": "Card / Feature",
+      "selector": "[data-testid='feature-card']",
+      "description": "Feature cards (first instance)",
+      "checkContent": true
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+# Environment — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+cli/dist/
+web/.next/
+web/out/
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Reports (generated output)
+reports/
+
+# Playwright cache
+.playwright/
+
+# Cache
+cli/.cache/
+*.cache
+
+# Sessions (contain auth cookies — never commit)
+sessions/
+
+# OS
+.DS_Store
+Thumbs.db

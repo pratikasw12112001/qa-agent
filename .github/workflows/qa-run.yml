@@ -1,0 +1,73 @@
+name: QA Run
+
+on:
+  repository_dispatch:
+    types: [qa-run]
+  workflow_dispatch:
+    inputs:
+      figmaUrl:
+        description: "Figma file URL"
+        required: true
+      liveUrl:
+        description: "Live site URL"
+        required: true
+      runId:
+        description: "Run ID (leave blank to auto-generate)"
+        required: false
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: agent/package.json
+
+      - name: Install agent dependencies
+        working-directory: agent
+        run: npm install
+
+      - name: Install Playwright Chromium
+        working-directory: agent
+        run: npx playwright install chromium --with-deps
+
+      - name: Run QA Agent
+        working-directory: agent
+        env:
+          FIGMA_TOKEN:    ${{ secrets.FIGMA_TOKEN }}
+          LOGIN_EMAIL:    ${{ secrets.LOGIN_EMAIL }}
+          LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          BLOB_TOKEN:     ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          FIGMA_FILE_URL: ${{ github.event.client_payload.figmaUrl || github.event.inputs.figmaUrl }}
+          LIVE_URL:       ${{ github.event.client_payload.liveUrl  || github.event.inputs.liveUrl }}
+          PRD_BLOB_URL:   ${{ github.event.client_payload.prdBlobUrl || '' }}
+          RUN_ID:         ${{ github.event.client_payload.runId    || github.event.inputs.runId || '' }}
+          LOGIN_URL:      ${{ vars.LOGIN_URL }}
+          SESSION_PATH:   ./sessions/session.json
+          OUT_DIR:        ./reports
+          CI:             "true"
+        run: node agent.mjs
+
+      - name: Upload report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report-${{ github.event.client_payload.runId || 'manual' }}
+          path: agent/reports/
+          retention-days: 30
+
+      - name: Post run summary
+        if: always()
+        run: |
+          echo "## QA Run Complete" >> $GITHUB_STEP_SUMMARY
+          echo "**Run ID:** ${{ github.event.client_payload.runId || 'manual' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Live URL:** ${{ github.event.client_payload.liveUrl || github.event.inputs.liveUrl }}" >> $GITHUB_STEP_SUMMARY

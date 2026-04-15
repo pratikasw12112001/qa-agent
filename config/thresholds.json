@@ -1,0 +1,29 @@
+{
+  "_comment": "Tolerance thresholds — values below warn, values above error",
+  "layout": {
+    "sizeDeltaPx":    { "warn": 4,  "error": 12 },
+    "paddingDeltaPx": { "warn": 2,  "error": 8  },
+    "marginDeltaPx":  { "warn": 4,  "error": 12 }
+  },
+  "visual": {
+    "colorDeltaE":         { "warn": 2, "error": 5 },
+    "fontSizeDeltaPx":     { "warn": 1, "error": 3 },
+    "lineHeightDeltaPx":   { "warn": 2, "error": 5 },
+    "borderRadiusDeltaPx": { "warn": 2, "error": 6 }
+  },
+  "content": {
+    "textSimilarityWarn":  0.85,
+    "textSimilarityError": 0.60
+  },
+  "accessibility": {
+    "wcagLevel": "AA",
+    "contrastBodyMin": 4.5,
+    "contrastLargeMin": 3.0
+  },
+  "performance": {
+    "lcpMs":    { "warn": 2500, "error": 4000 },
+    "clsScore": { "warn": 0.1,  "error": 0.25 },
+    "fcpMs":    { "warn": 1800, "error": 3000 },
+    "loadMs":   { "warn": 3000, "error": 6000 }
+  }
+}
