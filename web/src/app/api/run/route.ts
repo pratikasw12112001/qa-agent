@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { put } from "@vercel/blob";
 import crypto from "crypto";
 
 export async function POST(req: NextRequest) {
@@ -15,31 +14,11 @@ export async function POST(req: NextRequest) {
 
     const runId = crypto.randomBytes(6).toString("hex");
 
-    // Upload PRD to Vercel Blob if provided
-    let prdBlobUrl: string | undefined;
-    if (prdFile && prdFile.size > 0) {
-      const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
-      if (!blobToken) {
-        return NextResponse.json({ error: "BLOB_READ_WRITE_TOKEN not configured" }, { status: 500 });
-      }
-      const pdfBuf = await prdFile.arrayBuffer();
-      const blob = await put(`pdfs/${runId}.pdf`, Buffer.from(pdfBuf), {
-        access: "public",
-        contentType: "application/pdf",
-        token: blobToken,
-        addRandomSuffix: false,
-      });
-      prdBlobUrl = blob.url;
-    }
-
-    // Write initial progress marker to Blob
-    const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
-    if (blobToken) {
-      await put(
-        `progress/${runId}.json`,
-        JSON.stringify({ runId, status: "queued", queuedAt: new Date().toISOString() }),
-        { access: "public", token: blobToken, contentType: "application/json", addRandomSuffix: false }
-      );
+    // Store PRD as base64 in the dispatch payload if provided (max ~5MB)
+    let prdBase64: string | null = null;
+    if (prdFile && prdFile.size > 0 && prdFile.size < 5 * 1024 * 1024) {
+      const buf = await prdFile.arrayBuffer();
+      prdBase64 = Buffer.from(buf).toString("base64");
     }
 
     // Trigger GitHub Actions via repository_dispatch
@@ -64,7 +43,7 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           event_type: "qa-run",
-          client_payload: { runId, figmaUrl, liveUrl, prdBlobUrl: prdBlobUrl ?? null },
+          client_payload: { runId, figmaUrl, liveUrl, prdBase64 },
         }),
       }
     );
