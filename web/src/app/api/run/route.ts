@@ -38,9 +38,12 @@ async function uploadPdfToGhPages(runId: string, buf: Buffer): Promise<string | 
     body: JSON.stringify(body),
   });
 
-  if (!res.ok) return null;
-  // Return the raw GitHub Pages URL
-  return `https://pratikasw12112001.github.io/qa-agent/${path}`;
+  if (!res.ok) {
+    console.error("PDF upload to gh-pages failed:", res.status, await res.text());
+    return null;
+  }
+  // Use raw.githubusercontent.com — available immediately (no Pages deploy wait)
+  return `https://raw.githubusercontent.com/${GH_REPO}/gh-pages/${path}`;
 }
 
 export async function POST(req: NextRequest) {

@@ -7,6 +7,7 @@ export default function HomePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [prdFileName, setPrdFileName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -83,9 +84,19 @@ export default function HomePage() {
               }}
               onClick={() => fileRef.current?.click()}
             >
-              <input ref={fileRef} type="file" accept=".pdf" style={{ display: "none" }} onChange={() => {}} />
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pdf"
+                style={{ display: "none" }}
+                onChange={(e) => setPrdFileName(e.target.files?.[0]?.name ?? null)}
+              />
               <div style={{ fontSize: "24px", marginBottom: "6px" }}>📄</div>
-              <p style={{ fontSize: "13px", color: "#64748b" }}>Click to upload PDF</p>
+              {prdFileName ? (
+                <p style={{ fontSize: "13px", color: "#22c55e", fontWeight: 600 }}>✓ {prdFileName}</p>
+              ) : (
+                <p style={{ fontSize: "13px", color: "#64748b" }}>Click to upload PDF</p>
+              )}
               <p style={{ fontSize: "12px", color: "#475569", marginTop: "3px" }}>
                 Enables Phase 4 — AC checklist, copy validation, feature completeness
               </p>

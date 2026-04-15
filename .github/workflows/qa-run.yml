@@ -67,9 +67,14 @@ jobs:
         run: |
           if [ -n "$PRD_URL" ]; then
             mkdir -p agent/uploads
-            curl -sL "$PRD_URL" -o agent/uploads/prd.pdf
-            echo "PRD_PDF_PATH=./uploads/prd.pdf" >> $GITHUB_ENV
-            echo "  Downloaded PRD PDF from $PRD_URL"
+            # Retry up to 5 times with 10s delay (raw.githubusercontent.com is fast but may need a moment)
+            curl -sL --retry 5 --retry-delay 10 --retry-connrefused "$PRD_URL" -o agent/uploads/prd.pdf
+            if [ -s agent/uploads/prd.pdf ]; then
+              echo "PRD_PDF_PATH=./uploads/prd.pdf" >> $GITHUB_ENV
+              echo "  Downloaded PRD PDF from $PRD_URL ($(wc -c < agent/uploads/prd.pdf) bytes)"
+            else
+              echo "  WARNING: PRD PDF download failed or empty — skipping PRD analysis"
+            fi
           fi
 
       - name: Run QA Agent
