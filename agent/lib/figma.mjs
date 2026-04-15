@@ -22,7 +22,7 @@ export function extractFileKey(url) {
 /** Get all top-level frames across all pages */
 export async function detectFrames(figmaFileUrl, token) {
   const fileKey = extractFileKey(figmaFileUrl);
-  const res = await fetch(`${BASE}/files/${fileKey}?depth=3`, { headers: headers(token) });
+  const res = await fetch(`${BASE}/files/${fileKey}?depth=5`, { headers: headers(token) });
   if (!res.ok) throw new Error(`Figma API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
 
@@ -34,17 +34,12 @@ export async function detectFrames(figmaFileUrl, token) {
         if (/^frame\s*\d+$/i.test(node.name.trim())) continue;
         const w = node.absoluteBoundingBox?.width ?? 0;
         const h = node.absoluteBoundingBox?.height ?? 0;
-        // Skip tiny component/icon frames — real page frames are at least 600×400
-        if (w < 600 || h < 400) {
+        // Skip tiny component/icon frames — real page frames are at least 400×300
+        if (w < 400 || h < 300) {
           console.log(`  Figma: skipping small frame "${node.name}" (${Math.round(w)}×${Math.round(h)})`);
           continue;
         }
         const children = flattenNodes(node);
-        // Skip frames with almost no content — likely placeholders
-        if (children.length < 5) {
-          console.log(`  Figma: skipping sparse frame "${node.name}" (${children.length} nodes)`);
-          continue;
-        }
         frames.push({
           id: node.id,
           name: node.name,

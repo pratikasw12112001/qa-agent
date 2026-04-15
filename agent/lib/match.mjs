@@ -317,24 +317,31 @@ function getHeading() {
 function routeFrameScore(route, frame) {
   const frameName = normalize(frame.name);
   const framePage = normalize(frame.page ?? "");
+  const slug      = normalize(urlSlug(route.url)); // e.g. "logbook"
+
+  // Strong signal: Figma PAGE name matches the URL path segment.
+  // e.g. page "Logbook" vs URL "/logbook" → score 1.0
+  // This handles cases where frame names differ from route names but
+  // the designer organised frames inside a page named after the section.
+  const pageVsSlug = framePage ? similarity(framePage, slug) : 0;
 
   const candidates = [
     normalize(route.text ?? ""),
     normalize(route.title ?? ""),
     normalize(route.heading ?? ""),
-    normalize(urlSlug(route.url)),
+    slug,
   ].filter(Boolean);
 
-  let best = 0;
+  let nameScore = 0;
   for (const candidate of candidates) {
-    const s  = similarity(frameName, candidate);
-    if (s > best) best = s;
-    if (framePage) {
-      const sp = similarity(framePage, candidate);
-      if (sp > best) best = sp;
-    }
+    const s = similarity(frameName, candidate);
+    if (s > nameScore) nameScore = s;
   }
-  return best;
+
+  // Page match is weighted heavily — if the Figma page is "Logbook" and
+  // the URL is /logbook, all frames on that page are relevant candidates.
+  // Frame name match is a tiebreaker within the same page.
+  return Math.max(pageVsSlug * 0.8 + nameScore * 0.2, nameScore);
 }
 
 function urlSlug(url) {
