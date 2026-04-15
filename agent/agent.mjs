@@ -11,14 +11,21 @@
  * Optional:
  *   OPENAI_API_KEY   (Phase 4 PRD analysis)
  *   PRD_PDF_PATH     (local PDF path)
- *   PRD_BLOB_URL     (Vercel Blob URL for PDF)
  *   SESSION_PATH     (default: ./sessions/session.json)
  *   OUT_DIR          (default: ./reports)
  *   RUN_ID           (default: timestamp)
- *   BLOB_TOKEN       (Vercel Blob write token, for CI)
  */
 
-import "dotenv/config";
+// Load .env only when running locally (not in CI)
+if (!process.env.CI) {
+  try {
+    const { config: dotenvConfig } = await import("dotenv");
+    dotenvConfig();
+  } catch {
+    // dotenv not installed — fine in CI
+  }
+}
+
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { resolve, join } from "path";
 
@@ -46,30 +53,14 @@ const config = {
   runId:         process.env.RUN_ID ?? Date.now().toString(),
   openaiKey:     process.env.OPENAI_API_KEY ?? null,
   prdPdfPath:    process.env.PRD_PDF_PATH ?? null,
-  prdBlobUrl:    process.env.PRD_BLOB_URL ?? null,
-  blobToken:     process.env.BLOB_TOKEN ?? null,
 };
 
 function validateConfig() {
   const required = ["figmaToken", "figmaFileUrl", "liveUrl", "loginEmail", "loginPassword"];
   const missing = required.filter((k) => !config[k]);
   if (missing.length) {
-    console.error(`Missing required env vars: ${missing.map((k) => k.toUpperCase().replace(/([A-Z])/g, "_$1").toUpperCase()).join(", ")}`);
+    console.error(`Missing required env vars: ${missing.map((k) => k.replace(/([A-Z])/g, "_$1").toUpperCase()).join(", ")}`);
     process.exit(1);
-  }
-}
-
-// ─── Progress (for web UI polling) ───────────────────────────────────────────
-
-async function updateProgress(data) {
-  if (!config.blobToken) return;
-  try {
-    const { put } = await import("@vercel/blob");
-    await put(`progress/${config.runId}.json`, JSON.stringify(data), {
-      access: "public", token: config.blobToken, addRandomSuffix: false,
-    });
-  } catch (e) {
-    // Non-fatal — local runs don't need blob
   }
 }
 
@@ -84,8 +75,6 @@ async function main() {
   console.log(`║  Frontend QA Agent — Run ${config.runId}`);
   console.log(`║  ${config.liveUrl}`);
   console.log(`╚══════════════════════════════════════════════\n`);
-
-  await updateProgress({ runId: config.runId, status: "starting", phase: 0 });
 
   // ── Step 1: Auth ───────────────────────────────────────────────────────────
   console.log("▶  Auth");
@@ -105,20 +94,15 @@ async function main() {
 
   // ── Step 4: PRD ───────────────────────────────────────────────────────────
   let prdStructure = null;
-  if (config.prdPdfPath || config.prdBlobUrl) {
+  if (config.prdPdfPath) {
     console.log("\n▶  PRD — parsing");
-    let pdfSource = config.prdPdfPath;
-    if (config.prdBlobUrl) {
-      const res = await fetch(config.prdBlobUrl);
-      pdfSource = Buffer.from(await res.arrayBuffer());
-    }
-    const prdText = await parsePrd(pdfSource);
+    const prdText = await parsePrd(config.prdPdfPath);
     if (prdText) {
       prdStructure = await extractPrdStructure(prdText, config.openaiKey);
       console.log(`   ACs: ${prdStructure?.acceptanceCriteria?.length ?? 0}, Flows: ${prdStructure?.userFlows?.length ?? 0}`);
     }
   } else {
-    console.log("\n▶  PRD — skipped (no PRD_PDF_PATH or PRD_BLOB_URL)");
+    console.log("\n▶  PRD — skipped (no PRD_PDF_PATH set)");
   }
 
   // ── Step 5: Per-screen testing ────────────────────────────────────────────
@@ -131,8 +115,6 @@ async function main() {
     console.log(`  Screen ${si + 1}/${totalScreens}: ${screen.name}`);
     console.log(`  ${screen.url}`);
     console.log(`══════════════════════════════════════`);
-
-    await updateProgress({ runId: config.runId, status: "running", currentScreen: si + 1, totalScreens, screenName: screen.name });
 
     // Phase 1: Visual Comparison
     console.log("\n  Phase 1 · Visual Comparison");
@@ -177,7 +159,6 @@ async function main() {
     console.log("\n▶  Phase 4 · PRD Compliance");
     try {
       const prd4Result = await runPrdCompliance(processedScreens, prdStructure, config.sessionPath, config);
-      // Attach PRD results to first screen (they're cross-screen)
       processedScreens[0].phase4 = prd4Result;
       const acPass = prd4Result.acceptanceCriteria?.filter((ac) => ac.status === "pass").length ?? 0;
       const acTotal = prd4Result.acceptanceCriteria?.length ?? 0;
@@ -200,34 +181,23 @@ async function main() {
     },
   });
 
-  const reportPath = join(config.outDir, `qa-${config.runId}.html`);
+  // Save as report.html (workflow uploads this to gh-pages as {runId}.html)
+  const reportPath = join(config.outDir, "report.html");
   writeFileSync(reportPath, html, "utf8");
   console.log(`\n✅  Report saved: ${reportPath}`);
 
-  // Upload to Vercel Blob (CI)
-  if (config.blobToken) {
-    try {
-      const { put } = await import("@vercel/blob");
-      const blob = await put(`reports/${config.runId}.html`, html, {
-        access: "public", token: config.blobToken, contentType: "text/html", addRandomSuffix: false,
-      });
-      console.log(`🌐  Blob URL: ${blob.url}`);
-      await updateProgress({ runId: config.runId, status: "done", reportUrl: blob.url });
-      if (process.env.GITHUB_OUTPUT) {
-        const out = `report_url=${blob.url}\nrun_id=${config.runId}\n`;
-        writeFileSync(process.env.GITHUB_OUTPUT, out, { flag: "a" });
-      }
-    } catch (e) {
-      console.warn("  ⚠ Blob upload failed:", e.message.slice(0, 80));
-    }
+  // Also write to GITHUB_STEP_SUMMARY for quick link in Actions UI
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const runId = config.runId;
+    const summaryLine = `\n### Report\nhttps://pratikasw12112001.github.io/qa-agent/reports/${runId}.html\n`;
+    writeFileSync(process.env.GITHUB_STEP_SUMMARY, summaryLine, { flag: "a" });
   }
 
-  // Summary
   const allFindings = processedScreens.flatMap((s) => s.phase1?.findings ?? []);
   const errors = allFindings.filter((f) => f.severity === "error").length;
   const warns  = allFindings.filter((f) => f.severity === "warn").length;
   console.log(`\n  Errors: ${errors} | Warnings: ${warns}`);
-  process.exit(errors > 0 ? 1 : 0);
+  process.exit(0); // always exit 0 so workflow continues to upload step
 }
 
 // ─── Phase 1 Runner ───────────────────────────────────────────────────────────
@@ -262,7 +232,6 @@ async function runPhase1(screen, fileKey, config) {
 
   for (const { figmaNode, liveElement } of pairs) {
     if (!liveElement) {
-      // Figma node not found in live
       if (figmaNode.text && figmaNode.text.length > 2) {
         findings.push({
           category: "presence", severity: "error",
@@ -298,7 +267,6 @@ async function runPhase1(screen, fileKey, config) {
 function loadThresholds() {
   const path = resolve("../config/thresholds.json");
   if (existsSync(path)) return JSON.parse(readFileSync(path, "utf8"));
-  // Defaults
   return {
     layout:  { sizeDeltaPx: { warn: 4, error: 12 }, paddingDeltaPx: { warn: 2, error: 8 }, marginDeltaPx: { warn: 4, error: 12 } },
     visual:  { colorDeltaE: { warn: 2, error: 5 }, fontSizeDeltaPx: { warn: 1, error: 3 }, lineHeightDeltaPx: { warn: 2, error: 5 }, borderRadiusDeltaPx: { warn: 2, error: 6 } },

@@ -61,14 +61,15 @@ jobs:
 
           git checkout main
 
-      - name: Decode PRD PDF if provided
+      - name: Download PRD PDF if provided
         env:
-          PRD_BASE64: ${{ github.event.client_payload.prdBase64 || '' }}
+          PRD_URL: ${{ github.event.client_payload.prdUrl || '' }}
         run: |
-          if [ -n "$PRD_BASE64" ]; then
+          if [ -n "$PRD_URL" ]; then
             mkdir -p agent/uploads
-            echo "$PRD_BASE64" | base64 -d > agent/uploads/prd.pdf
+            curl -sL "$PRD_URL" -o agent/uploads/prd.pdf
             echo "PRD_PDF_PATH=./uploads/prd.pdf" >> $GITHUB_ENV
+            echo "  Downloaded PRD PDF from $PRD_URL"
           fi
 
       - name: Run QA Agent

@@ -1,6 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 
+const GH_TOKEN  = process.env.GH_TOKEN;
+const GH_REPO   = process.env.GITHUB_REPO ?? "pratikasw12112001/qa-agent";
+const GH_API    = "https://api.github.com";
+
+/** Store the PDF on gh-pages branch so the workflow can download it by URL */
+async function uploadPdfToGhPages(runId: string, buf: Buffer): Promise<string | null> {
+  if (!GH_TOKEN) return null;
+  const path = `pdfs/${runId}.pdf`;
+  const content = buf.toString("base64");
+
+  // Check if file already exists (need its SHA for updates)
+  let sha: string | undefined;
+  try {
+    const existing = await fetch(
+      `${GH_API}/repos/${GH_REPO}/contents/${path}?ref=gh-pages`,
+      { headers: { Authorization: `token ${GH_TOKEN}`, Accept: "application/vnd.github.v3+json" } }
+    );
+    if (existing.ok) sha = (await existing.json()).sha;
+  } catch { /* new file */ }
+
+  const body: Record<string, string> = {
+    message: `pdf: ${runId}`,
+    content,
+    branch: "gh-pages",
+  };
+  if (sha) body.sha = sha;
+
+  const res = await fetch(`${GH_API}/repos/${GH_REPO}/contents/${path}`, {
+    method: "PUT",
+    headers: {
+      Authorization: `token ${GH_TOKEN}`,
+      Accept: "application/vnd.github.v3+json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) return null;
+  // Return the raw GitHub Pages URL
+  return `https://pratikasw12112001.github.io/qa-agent/${path}`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
@@ -14,36 +56,32 @@ export async function POST(req: NextRequest) {
 
     const runId = crypto.randomBytes(6).toString("hex");
 
-    // Store PRD as base64 in the dispatch payload if provided (max ~5MB)
-    let prdBase64: string | null = null;
-    if (prdFile && prdFile.size > 0 && prdFile.size < 5 * 1024 * 1024) {
-      const buf = await prdFile.arrayBuffer();
-      prdBase64 = Buffer.from(buf).toString("base64");
+    // Upload PRD PDF to gh-pages branch and get a URL the workflow can download
+    let prdUrl: string | null = null;
+    if (prdFile && prdFile.size > 0) {
+      const buf = Buffer.from(await prdFile.arrayBuffer());
+      prdUrl = await uploadPdfToGhPages(runId, buf);
     }
 
-    // Trigger GitHub Actions via repository_dispatch
-    const ghToken = process.env.GH_TOKEN;
-    const ghRepo  = process.env.GITHUB_REPO; // format: "owner/repo"
-
-    if (!ghToken || !ghRepo) {
+    if (!GH_TOKEN || !GH_REPO) {
       return NextResponse.json(
-        { error: "GH_TOKEN or GITHUB_REPO not configured. Set these in Vercel environment variables." },
+        { error: "GH_TOKEN or GITHUB_REPO not configured." },
         { status: 500 }
       );
     }
 
     const dispatchRes = await fetch(
-      `https://api.github.com/repos/${ghRepo}/dispatches`,
+      `${GH_API}/repos/${GH_REPO}/dispatches`,
       {
         method: "POST",
         headers: {
-          Authorization: `token ${ghToken}`,
+          Authorization: `token ${GH_TOKEN}`,
           Accept: "application/vnd.github.v3+json",
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           event_type: "qa-run",
-          client_payload: { runId, figmaUrl, liveUrl, prdBase64 },
+          client_payload: { runId, figmaUrl, liveUrl, prdUrl },
         }),
       }
     );
