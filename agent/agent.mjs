@@ -84,6 +84,9 @@ async function main() {
   console.log("\n▶  Figma — auto-detecting frames");
   const { fileKey, frames } = await detectFrames(config.figmaFileUrl, config.figmaToken);
   console.log(`   Found ${frames.length} frames`);
+  for (const f of frames) {
+    console.log(`   • "${f.name}" [${f.page}] ${Math.round(f.width)}×${Math.round(f.height)} — ${f.nodeCount ?? f.children?.length ?? 0} nodes`);
+  };
 
   // ── Step 3: Match Frames to Routes ────────────────────────────────────────
   console.log("\n▶  Matching frames to live routes");

@@ -32,13 +32,27 @@ export async function detectFrames(figmaFileUrl, token) {
       if (node.type === "FRAME" && node.visible !== false) {
         // Skip auto-named frames like "Frame 1234" — they are not real screens
         if (/^frame\s*\d+$/i.test(node.name.trim())) continue;
+        const w = node.absoluteBoundingBox?.width ?? 0;
+        const h = node.absoluteBoundingBox?.height ?? 0;
+        // Skip tiny component/icon frames — real page frames are at least 600×400
+        if (w < 600 || h < 400) {
+          console.log(`  Figma: skipping small frame "${node.name}" (${Math.round(w)}×${Math.round(h)})`);
+          continue;
+        }
+        const children = flattenNodes(node);
+        // Skip frames with almost no content — likely placeholders
+        if (children.length < 5) {
+          console.log(`  Figma: skipping sparse frame "${node.name}" (${children.length} nodes)`);
+          continue;
+        }
         frames.push({
           id: node.id,
           name: node.name,
           page: page.name,
-          width: node.absoluteBoundingBox?.width ?? 1440,
-          height: node.absoluteBoundingBox?.height ?? 900,
-          children: flattenNodes(node),
+          width: w,
+          height: h,
+          nodeCount: children.length,
+          children,
           interactions: extractInteractions(node),
         });
       }

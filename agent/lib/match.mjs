@@ -41,40 +41,51 @@ export async function matchFramesToRoutes(frames, baseUrl, sessionPath) {
     console.log(`   Discovered ${routes.length} routes`);
   }
 
-  // For each route, find the best matching Figma frame
+  // For each route, find the best matching Figma frame.
+  // Specific-path mode: always assign a frame even with score=0 so every
+  // discovered route gets tested. Frames sorted by nodeCount desc so larger
+  // (more complete) page designs are preferred in ties.
+  const sortedFrames = [...frames].sort((a, b) => (b.nodeCount ?? 0) - (a.nodeCount ?? 0));
   const matched = [];
   const usedFrameIds = new Set();
-  const threshold = isSpecificPath ? 0.1 : 0.35; // lower bar for explicit URLs
 
   for (const route of routes) {
     let best = null;
-    let bestScore = 0;
+    let bestScore = -1;
 
-    for (const frame of frames) {
+    // First pass: unused frames only
+    for (const frame of sortedFrames) {
       if (usedFrameIds.has(frame.id)) continue;
       const score = routeFrameScore(route, frame);
       if (score > bestScore) { bestScore = score; best = frame; }
     }
 
+    // For base-URL mode, require a minimum score
+    const threshold = isSpecificPath ? -1 : 0.35;
+
     if (best && bestScore >= threshold) {
       usedFrameIds.add(best.id);
       matched.push({ ...best, url: route.url, matchScore: bestScore });
-      console.log(`   [${bestScore.toFixed(2)}] "${best.name}" → ${route.url}`);
+      console.log(`   [${bestScore.toFixed(2)}] "${best.name}" (${best.nodeCount ?? "?"} nodes) → ${route.url}`);
+    } else if (isSpecificPath && sortedFrames.length > 0) {
+      // All frames already used — reuse the highest-scoring one for this route
+      let reuseBest = sortedFrames[0]; let reuseScore = 0;
+      for (const frame of sortedFrames) {
+        const score = routeFrameScore(route, frame);
+        if (score > reuseScore) { reuseScore = score; reuseBest = frame; }
+      }
+      matched.push({ ...reuseBest, url: route.url, matchScore: reuseScore });
+      console.log(`   [${reuseScore.toFixed(2)}] "${reuseBest.name}" (reused) → ${route.url}`);
     }
 
     if (matched.length >= MAX_SCREENS) break;
   }
 
-  // Absolute fallback: use the provided URL with the best-named frame
+  // Absolute fallback
   if (matched.length === 0 && frames.length > 0) {
-    const slug = normalize(urlSlug(baseUrl));
-    let top = frames[0]; let topScore = 0;
-    for (const f of frames) {
-      const s = similarity(normalize(f.name), slug);
-      if (s > topScore) { topScore = s; top = f; }
-    }
-    console.log(`   No matches — using best frame "${top.name}" at ${baseUrl}`);
-    matched.push({ ...top, url: baseUrl, matchScore: topScore });
+    const top = sortedFrames[0];
+    console.log(`   No routes matched — using "${top.name}" at ${baseUrl}`);
+    matched.push({ ...top, url: baseUrl, matchScore: 0 });
   }
 
   return matched;
