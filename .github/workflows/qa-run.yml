@@ -95,6 +95,9 @@ jobs:
           RUN_ID: ${{ github.event.client_payload.runId || github.event.inputs.runId || 'manual' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Save report path BEFORE switching branches
+          REPORT_SRC="$GITHUB_WORKSPACE/agent/reports/report.html"
+
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
           git fetch origin gh-pages
@@ -102,9 +105,9 @@ jobs:
 
           mkdir -p reports progress
 
-          # Copy report HTML if it exists
-          if [ -f "agent/reports/report.html" ]; then
-            cp agent/reports/report.html reports/${RUN_ID}.html
+          # Copy report HTML using absolute path saved above
+          if [ -f "$REPORT_SRC" ]; then
+            cp "$REPORT_SRC" reports/${RUN_ID}.html
           fi
 
           # Write final progress JSON

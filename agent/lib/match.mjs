@@ -56,70 +56,91 @@ export async function matchFramesToRoutes(frames, baseUrl, sessionPath) {
   return matched;
 }
 
-/** Crawl the live app and collect all unique internal routes */
+/** Crawl the live app and collect all unique internal routes (SPA-aware) */
 async function discoverRoutes(baseUrl, sessionPath) {
   const browser = await launchBrowser(true);
   const routes = [];
   const origin = new URL(baseUrl).origin;
+  const seen = new Set();
+
+  function addRoute(url, text, title = "", heading = "") {
+    const clean = url.split("?")[0].split("#")[0];
+    if (!clean.startsWith(origin)) return;
+    if (seen.has(clean)) return;
+    seen.add(clean);
+    routes.push({ url: clean, text, title, heading });
+  }
 
   try {
     const context = await newContext(browser, sessionPath);
     const page = await context.newPage();
+
+    // Track all URL changes (SPA navigations)
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) {
+        const url = frame.url().split("?")[0].split("#")[0];
+        if (url.startsWith(origin) && !seen.has(url)) {
+          seen.add(url);
+        }
+      }
+    });
+
     await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 30000 });
     await page.waitForTimeout(2000);
 
-    // Collect links + page title from the root page
-    const rootLinks = await page.evaluate(() => {
+    addRoute(baseUrl, await page.title());
+
+    // Collect all <a href> links (both full URLs and relative paths)
+    const hrefLinks = await page.evaluate((origin) => {
       const links = [];
       document.querySelectorAll("a[href]").forEach((a) => {
-        if (a.href && a.href.startsWith(window.location.origin)) {
-          links.push({
-            url: a.href.split("?")[0].split("#")[0],
-            text: a.textContent ? a.textContent.trim() : "",
-          });
-        }
-      });
-      // Also check sidebar/nav items
-      document.querySelectorAll(
-        "[role='menuitem'], .ant-menu-item, .ant-menu-submenu-title, nav a, sidebar a, .sidebar a"
-      ).forEach((el) => {
-        const href = el.href || el.getAttribute("data-href") || "";
-        if (href && href.startsWith(window.location.origin)) {
-          links.push({
-            url: href.split("?")[0].split("#")[0],
-            text: el.textContent ? el.textContent.trim() : "",
-          });
+        const href = a.href || "";
+        if (href.startsWith(origin) || href.startsWith("/")) {
+          links.push({ href: a.href || (origin + a.getAttribute("href")), text: a.textContent ? a.textContent.trim() : "" });
         }
       });
       return links;
-    });
+    }, origin);
 
-    // Add root page itself
-    routes.push({ url: baseUrl, text: await page.title() });
+    for (const l of hrefLinks) addRoute(l.href, l.text);
 
-    // Deduplicate and add discovered links
-    const seen = new Set([baseUrl]);
-    for (const link of rootLinks) {
-      if (!seen.has(link.url) && link.url.startsWith(origin) && link.url !== baseUrl) {
-        seen.add(link.url);
-        routes.push(link);
+    // Click through sidebar/nav menu items to discover SPA routes
+    const navSelectors = [
+      ".ant-menu-item",
+      ".ant-menu-submenu-title",
+      "[role='menuitem']",
+      "nav li",
+      ".sidebar-item",
+      "[class*='menu-item']",
+      "[class*='nav-item']",
+    ];
+
+    for (const sel of navSelectors) {
+      const items = await page.locator(sel).all();
+      for (const item of items.slice(0, 15)) {
+        try {
+          const text = (await item.textContent() || "").trim();
+          if (!text || text.length < 2) continue;
+          await item.click({ timeout: 3000 });
+          await page.waitForTimeout(800);
+          const currentUrl = page.url();
+          addRoute(currentUrl, text, "", "");
+        } catch { /* skip */ }
       }
+      if (routes.length > 15) break;
     }
 
-    // Visit each link to get page title for better matching
-    for (const route of routes.slice(1, 20)) {
+    // For each discovered route, fetch its page title and heading
+    for (const route of routes.slice(1)) {
       try {
         await page.goto(route.url, { waitUntil: "domcontentloaded", timeout: 15000 });
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(600);
         route.title = await page.title();
-        // Also collect h1/h2 heading text
         route.heading = await page.evaluate(() => {
-          const h = document.querySelector("h1, h2, .ant-page-header-heading-title");
+          const h = document.querySelector("h1, h2, .ant-page-header-heading-title, [class*='page-title']");
           return h ? h.textContent.trim() : "";
         });
-      } catch {
-        // skip if navigation fails
-      }
+      } catch { /* skip */ }
     }
 
     await context.close();
