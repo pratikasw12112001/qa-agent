@@ -1,30 +1,29 @@
-# Environment — NEVER commit
+node_modules/
+.next/
+out/
+dist/
+build/
+.DS_Store
+*.log
+
+# Secrets
 .env
 .env.local
 .env.*.local
 
-# Build outputs
-cli/dist/
-web/.next/
-web/out/
+# Reports and cache
+reports/*.html
+reports/*.json
+agent/cache/*.json
+agent/sessions/*.json
+agent/uploads/*.pdf
 
-# Dependencies
-node_modules/
-**/node_modules/
+# Keep directory structure
+!reports/.gitkeep
+!agent/cache/.gitkeep
+!agent/sessions/.gitkeep
+!agent/uploads/.gitkeep
 
-# Reports (generated output)
-reports/
-
-# Playwright cache
-.playwright/
-
-# Cache
-cli/.cache/
-*.cache
-
-# Sessions (contain auth cookies — never commit)
-sessions/
-
-# OS
-.DS_Store
-Thumbs.db
+# IDE
+.vscode/
+.idea/

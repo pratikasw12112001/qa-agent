@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Frontend QA Agent",
-  description: "Compare Figma designs against live UI automatically",
+  title: "QA Agent",
+  description: "Automated frontend QA testing — Figma vs Live",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -18,10 +18,9 @@ on:
 jobs:
   qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     permissions:
       contents: write
-      pages: write
 
     steps:
       - name: Checkout main
@@ -31,8 +30,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: agent/package.json
 
       - name: Install agent dependencies
         working-directory: agent
@@ -42,7 +39,7 @@ jobs:
         working-directory: agent
         run: npx playwright install chromium --with-deps
 
-      - name: Write progress – queued
+      - name: Write progress — running
         env:
           RUN_ID: ${{ github.event.client_payload.runId || github.event.inputs.runId || 'manual' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,33 +48,29 @@ jobs:
           git config user.name "GitHub Actions"
           git fetch origin gh-pages
           git checkout gh-pages
-
           mkdir -p progress
-          echo '{"status":"running","queuedAt":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > progress/${RUN_ID}.json
-
+          echo "{\"status\":\"running\",\"queuedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > progress/${RUN_ID}.json
           git add progress/${RUN_ID}.json
           git commit -m "progress: ${RUN_ID} running" || true
           git push origin gh-pages
-
           git checkout main
 
-      - name: Download PRD PDF if provided
+      - name: Download PRD PDF (if provided)
         env:
           PRD_URL: ${{ github.event.client_payload.prdUrl || '' }}
         run: |
           if [ -n "$PRD_URL" ]; then
             mkdir -p agent/uploads
-            # Retry up to 5 times with 10s delay (raw.githubusercontent.com is fast but may need a moment)
             curl -sL --retry 5 --retry-delay 10 --retry-connrefused "$PRD_URL" -o agent/uploads/prd.pdf
             if [ -s agent/uploads/prd.pdf ]; then
               echo "PRD_PDF_PATH=./uploads/prd.pdf" >> $GITHUB_ENV
-              echo "  Downloaded PRD PDF from $PRD_URL ($(wc -c < agent/uploads/prd.pdf) bytes)"
+              echo "  PRD downloaded ($(wc -c < agent/uploads/prd.pdf) bytes)"
             else
-              echo "  WARNING: PRD PDF download failed or empty — skipping PRD analysis"
+              echo "  WARN: PRD download failed — continuing without PRD"
             fi
           fi
 
-      - name: Run QA Agent
+      - name: Run QA agent
         working-directory: agent
         env:
           FIGMA_TOKEN:    ${{ secrets.FIGMA_TOKEN }}
@@ -85,22 +78,20 @@ jobs:
           LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           FIGMA_FILE_URL: ${{ github.event.client_payload.figmaUrl || github.event.inputs.figmaUrl }}
-          LIVE_URL:       ${{ github.event.client_payload.liveUrl  || github.event.inputs.liveUrl }}
+          LIVE_URL:       ${{ github.event.client_payload.liveUrl || github.event.inputs.liveUrl }}
           PRD_PDF_PATH:   ${{ env.PRD_PDF_PATH || '' }}
-          RUN_ID:         ${{ github.event.client_payload.runId    || github.event.inputs.runId || '' }}
-          LOGIN_URL:      ${{ vars.LOGIN_URL }}
+          RUN_ID:         ${{ github.event.client_payload.runId || github.event.inputs.runId || 'manual' }}
           SESSION_PATH:   ./sessions/session.json
           OUT_DIR:        ./reports
-          CI:             "true"
+          CI: "true"
         run: node agent.mjs
 
-      - name: Upload report to gh-pages
+      - name: Upload report + final progress
         if: always()
         env:
           RUN_ID: ${{ github.event.client_payload.runId || github.event.inputs.runId || 'manual' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Save report path BEFORE switching branches
           REPORT_SRC="$GITHUB_WORKSPACE/agent/reports/report.html"
 
           git config user.email "actions@github.com"
@@ -110,27 +101,22 @@ jobs:
 
           mkdir -p reports progress
 
-          # Copy report HTML using absolute path saved above
           if [ -f "$REPORT_SRC" ]; then
             cp "$REPORT_SRC" reports/${RUN_ID}.html
-          fi
-
-          # Write final progress JSON
-          if [ -f "agent/reports/report.html" ]; then
             STATUS="done"
           else
             STATUS="error"
           fi
-          echo '{"status":"'${STATUS}'","completedAt":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","reportUrl":"https://pratikasw12112001.github.io/qa-agent/reports/'${RUN_ID}'.html"}' > progress/${RUN_ID}.json
 
-          git add reports/${RUN_ID}.html progress/${RUN_ID}.json 2>/dev/null || true
+          echo "{\"status\":\"${STATUS}\",\"completedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"reportUrl\":\"https://pratikasw12112001.github.io/qa-agent/reports/${RUN_ID}.html\"}" > progress/${RUN_ID}.json
+
+          git add reports/${RUN_ID}.html 2>/dev/null || true
           git add progress/${RUN_ID}.json
           git commit -m "report: ${RUN_ID} ${STATUS}" || true
           git push origin gh-pages
-
           git checkout main
 
-      - name: Upload artifact (backup)
+      - name: Upload artifact backup
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -138,11 +124,10 @@ jobs:
           path: agent/reports/
           retention-days: 30
 
-      - name: Post run summary
+      - name: Step summary
         if: always()
         run: |
           RUN_ID="${{ github.event.client_payload.runId || 'manual' }}"
-          echo "## QA Run Complete" >> $GITHUB_STEP_SUMMARY
+          echo "## QA Run" >> $GITHUB_STEP_SUMMARY
           echo "**Run ID:** ${RUN_ID}" >> $GITHUB_STEP_SUMMARY
           echo "**Report:** https://pratikasw12112001.github.io/qa-agent/reports/${RUN_ID}.html" >> $GITHUB_STEP_SUMMARY
-          echo "**Live URL:** ${{ github.event.client_payload.liveUrl || github.event.inputs.liveUrl }}" >> $GITHUB_STEP_SUMMARY

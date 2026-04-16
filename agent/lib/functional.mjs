@@ -1,278 +1,137 @@
 /**
- * Phase 2 — Functional Testing (read-only)
- * Tests interactions: search, filter, sort, pagination,
- * kebab menus, navigation, modals, form field focus.
+ * Functional test runner.
+ *
+ * Generic checks run against the source URL + its discovered states:
+ *   - Console errors
+ *   - Failed network requests (4xx/5xx)
+ *   - Broken links in content area
+ *   - Form validation (forms in content area only)
+ *   - Interactive element responsiveness (content area)
+ *
+ * Sidebar/nav is excluded (per user requirement).
  */
 
-import { launchBrowser, newContext } from "./browser.mjs";
+import { chromium } from "playwright";
+import { runAxeChecks } from "./a11y.mjs";
 
-export async function runFunctionalTests(screen, sessionPath, config) {
-  const results = [];
-  const browser = await launchBrowser(true);
+const SIDEBAR_SELECTORS = [
+  ".ant-menu", ".ant-layout-sider", '[class*="sidebar" i]',
+  '[class*="side-nav" i]', '[class*="left-nav" i]', 'aside', 'nav[role="navigation"]',
+].join(", ");
 
-  try {
-    const context = await newContext(browser, sessionPath);
-    const page = await context.newPage();
-    await page.goto(screen.url, { waitUntil: "networkidle", timeout: 45000 });
-    await page.waitForTimeout(2000);
+export async function runFunctionalTests({ liveUrl, sessionPath, states }) {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    storageState: sessionPath,
+    viewport: { width: 1440, height: 900 },
+  });
+  const page = await context.newPage();
 
-    // Run each test, capture before/after
-    const tests = buildTestSuite(screen);
-    for (const test of tests) {
-      const result = await runTest(page, test, screen.url);
-      results.push(result);
-      // Reload to reset state between tests
-      await page.goto(screen.url, { waitUntil: "networkidle", timeout: 30000 });
-      await page.waitForTimeout(1000);
+  const consoleErrors = [];
+  const networkErrors = [];
+
+  page.on("console", (msg) => {
+    if (msg.type() === "error") {
+      consoleErrors.push({ url: page.url(), message: msg.text().slice(0, 300) });
     }
+  });
+  page.on("response", (res) => {
+    if (res.status() >= 400) {
+      networkErrors.push({ url: res.url(), status: res.status(), onPage: page.url() });
+    }
+  });
 
-    await context.close();
-  } finally {
-    await browser.close();
+  const results = {
+    consoleErrors: [], networkErrors: [],
+    brokenLinks: [], formChecks: [], a11y: [],
+    testedUrls: [],
+  };
+
+  // Deduplicate state URLs
+  const uniqueUrls = Array.from(new Set(states.map((s) => s.url)));
+
+  for (const url of uniqueUrls) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+      results.testedUrls.push(url);
+
+      // Broken links
+      results.brokenLinks.push(...await checkBrokenLinks(page));
+
+      // Form validation
+      results.formChecks.push(...await checkForms(page));
+
+      // Accessibility
+      const a11y = await runAxeChecks(page).catch(() => null);
+      if (a11y) results.a11y.push({ url, violations: a11y });
+    } catch (e) {
+      consoleErrors.push({ url, message: `page load failed: ${e.message.slice(0, 200)}` });
+    }
   }
 
+  results.consoleErrors = consoleErrors;
+  results.networkErrors = dedupeByUrl(networkErrors);
+
+  await browser.close();
   return results;
 }
 
-async function runTest(page, test, baseUrl) {
-  const beforeBuf = await page.screenshot({ fullPage: false, type: "png" });
+// ─── helpers ────────────────────────────────────────────────────────────────
 
-  let passed = false;
-  let errorMessage = null;
-  let afterBuf = null;
-  let afterUrl = null;
+async function checkBrokenLinks(page) {
+  const links = await page.evaluate((sidebarSel) => {
+    return Array.from(document.querySelectorAll('a[href]'))
+      .filter((a) => !a.closest(sidebarSel))
+      .map((a) => a.href)
+      .filter((h) => h.startsWith("http"))
+      .slice(0, 15);
+  }, SIDEBAR_SELECTORS);
 
-  try {
-    await test.run(page);
-    await page.waitForTimeout(1500);
-    afterBuf = await page.screenshot({ fullPage: false, type: "png" });
-    afterUrl = page.url();
-
-    // Validate outcome
-    const validation = await test.validate(page, afterUrl, baseUrl);
-    passed = validation.passed;
-    if (!validation.passed) errorMessage = validation.reason;
-  } catch (e) {
-    errorMessage = e.message.slice(0, 200);
-    try { afterBuf = await page.screenshot({ fullPage: false, type: "png" }); } catch {}
+  const broken = [];
+  for (const href of Array.from(new Set(links))) {
+    try {
+      const res = await fetch(href, { method: "HEAD", redirect: "follow" }).catch(() => null);
+      if (res && res.status >= 400) broken.push({ href, status: res.status });
+    } catch {
+      // ignore network errors (may be CORS-blocked HEAD)
+    }
   }
-
-  return {
-    name: test.name,
-    category: test.category,
-    passed,
-    errorMessage,
-    beforeScreenshot: beforeBuf.toString("base64"),
-    afterScreenshot: afterBuf?.toString("base64") ?? null,
-    afterUrl,
-  };
+  return broken;
 }
 
-function buildTestSuite(screen) {
-  const tests = [];
-
-  // ── Search ──────────────────────────────────────────────────────────────────
-  tests.push({
-    name: "Search input accepts text",
-    category: "search",
-    run: async (page) => {
-      const sel = [
-        'input[type="search"]', 'input[placeholder*="search" i]',
-        'input[placeholder*="Search" i]', ".ant-input", 'input[type="text"]',
-      ];
-      for (const s of sel) {
-        if ((await page.locator(s).count()) > 0) {
-          await page.fill(s, "test");
-          await page.waitForTimeout(800);
-          return;
+async function checkForms(page) {
+  const out = [];
+  const forms = await page.locator("form").all();
+  for (let i = 0; i < Math.min(forms.length, 3); i++) {
+    const form = forms[i];
+    try {
+      const inSidebar = await form.evaluate((el, sel) => !!el.closest(sel), SIDEBAR_SELECTORS);
+      if (inSidebar) continue;
+      // Try submitting empty — see if validation kicks in
+      const submit = form.locator('button[type="submit"], input[type="submit"]').first();
+      if (await submit.count()) {
+        const before = page.url();
+        await submit.click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        const after = page.url();
+        const hasError = await page.locator('[class*="error" i], [aria-invalid="true"], [role="alert"]').count();
+        if (!hasError && before === after) {
+          out.push({ url: page.url(), formIndex: i, issue: "empty submit did not trigger validation or navigation" });
         }
       }
-      throw new Error("No search input found");
-    },
-    validate: async (page) => {
-      const val = await page.evaluate(() => {
-        const el = document.querySelector('input[type="search"], .ant-input, input[type="text"]');
-        return el ? el.value : null;
-      });
-      return val?.includes("test")
-        ? { passed: true }
-        : { passed: false, reason: "Search input value not retained" };
-    },
-  });
+    } catch {
+      // skip form
+    }
+  }
+  return out;
+}
 
-  // ── Filter dropdown ─────────────────────────────────────────────────────────
-  tests.push({
-    name: "Filter dropdown opens",
-    category: "filter",
-    run: async (page) => {
-      const sel = [
-        ".ant-select-selector", ".ant-dropdown-trigger",
-        'button:has-text("Filter")', 'button:has-text("filter")',
-        '[aria-label*="filter" i]',
-      ];
-      for (const s of sel) {
-        if ((await page.locator(s).count()) > 0) {
-          await page.click(s);
-          await page.waitForTimeout(800);
-          return;
-        }
-      }
-      throw new Error("No filter trigger found");
-    },
-    validate: async (page) => {
-      const visible = await page.evaluate(() => {
-        const menu = document.querySelector(
-          ".ant-select-dropdown, .ant-dropdown-menu, [class*='dropdown-menu']"
-        );
-        return menu && window.getComputedStyle(menu).display !== "none";
-      });
-      return visible
-        ? { passed: true }
-        : { passed: false, reason: "Dropdown did not open" };
-    },
+function dedupeByUrl(arr) {
+  const seen = new Set();
+  return arr.filter((x) => {
+    if (seen.has(x.url)) return false;
+    seen.add(x.url);
+    return true;
   });
-
-  // ── Column sort ─────────────────────────────────────────────────────────────
-  tests.push({
-    name: "Table column sort on click",
-    category: "sort",
-    run: async (page) => {
-      const th = page.locator("th.ant-table-column-has-sorters, th[class*='sortable']").first();
-      if ((await th.count()) === 0) throw new Error("No sortable column found");
-      const before = await page.evaluate(() =>
-        Array.from(document.querySelectorAll("tr.ant-table-row td:first-child"))
-          .slice(0, 3).map((td) => td.textContent?.trim())
-      );
-      await th.click();
-      await page.waitForTimeout(800);
-      page._sortBefore = before;
-    },
-    validate: async (page) => {
-      const after = await page.evaluate(() =>
-        Array.from(document.querySelectorAll("tr.ant-table-row td:first-child"))
-          .slice(0, 3).map((td) => td.textContent?.trim())
-      );
-      const ariaSort = await page.evaluate(() =>
-        document.querySelector("th[aria-sort]")?.getAttribute("aria-sort")
-      );
-      return ariaSort || JSON.stringify(after) !== JSON.stringify(page._sortBefore)
-        ? { passed: true }
-        : { passed: false, reason: "Sort did not change row order or aria-sort attribute" };
-    },
-  });
-
-  // ── Pagination ──────────────────────────────────────────────────────────────
-  tests.push({
-    name: "Pagination next page works",
-    category: "pagination",
-    run: async (page) => {
-      const next = page.locator(
-        ".ant-pagination-next:not(.ant-pagination-disabled), [aria-label='Next Page']"
-      ).first();
-      if ((await next.count()) === 0) throw new Error("No pagination found");
-      await next.click();
-      await page.waitForTimeout(1000);
-    },
-    validate: async (page) => {
-      const activePage = await page.evaluate(() =>
-        document.querySelector(".ant-pagination-item-active")?.textContent?.trim()
-      );
-      return activePage && activePage !== "1"
-        ? { passed: true }
-        : { passed: false, reason: "Page did not advance" };
-    },
-  });
-
-  // ── Kebab / row actions menu ────────────────────────────────────────────────
-  tests.push({
-    name: "Row action menu opens",
-    category: "navigation",
-    run: async (page) => {
-      const trigger = page.locator(".ant-dropdown-trigger, [class*='action-trigger']").first();
-      if ((await trigger.count()) === 0) throw new Error("No row action trigger found");
-      await trigger.click();
-      await page.waitForTimeout(800);
-    },
-    validate: async (page) => {
-      const visible = await page.evaluate(() => {
-        const menu = document.querySelector(".ant-dropdown-menu");
-        return menu && window.getComputedStyle(menu).display !== "none";
-      });
-      return visible
-        ? { passed: true }
-        : { passed: false, reason: "Action menu did not appear" };
-    },
-  });
-
-  // ── Kebab: View Log History navigation ─────────────────────────────────────
-  tests.push({
-    name: "View Log History navigates to detail",
-    category: "navigation",
-    run: async (page) => {
-      const trigger = page.locator(".ant-dropdown-trigger").first();
-      if ((await trigger.count()) === 0) throw new Error("No trigger");
-      await trigger.click();
-      await page.waitForSelector(".ant-dropdown-menu", { timeout: 3000 });
-      const item = page.locator(".ant-dropdown-menu-item").filter({ hasText: "View Log History" }).first();
-      if ((await item.count()) === 0) throw new Error("View Log History not in menu");
-      await item.click();
-      await page.waitForTimeout(2000);
-    },
-    validate: async (page, afterUrl, baseUrl) => {
-      return afterUrl !== baseUrl && !afterUrl.endsWith("/logbook")
-        ? { passed: true }
-        : { passed: false, reason: `Did not navigate away from ${baseUrl} (still at ${afterUrl})` };
-    },
-  });
-
-  // ── Kebab: Edit & Configure navigation ─────────────────────────────────────
-  tests.push({
-    name: "Edit & Configure navigates to config screen",
-    category: "navigation",
-    run: async (page) => {
-      const trigger = page.locator(".ant-dropdown-trigger").first();
-      if ((await trigger.count()) === 0) throw new Error("No trigger");
-      await trigger.click();
-      await page.waitForSelector(".ant-dropdown-menu", { timeout: 3000 });
-      const item = page.locator(".ant-dropdown-menu-item").filter({ hasText: "Edit" }).first();
-      if ((await item.count()) === 0) throw new Error("Edit & Configure not in menu");
-      await item.click();
-      await page.waitForTimeout(2000);
-    },
-    validate: async (page, afterUrl, baseUrl) => {
-      return afterUrl !== baseUrl
-        ? { passed: true }
-        : { passed: false, reason: "Did not navigate away from list" };
-    },
-  });
-
-  // ── Form fields focusable ───────────────────────────────────────────────────
-  tests.push({
-    name: "Form inputs are focusable",
-    category: "form",
-    run: async (page) => {
-      const input = page.locator("input, textarea").first();
-      if ((await input.count()) === 0) throw new Error("No inputs found");
-      await input.focus();
-      await page.waitForTimeout(300);
-    },
-    validate: async (page) => {
-      const focused = await page.evaluate(() => document.activeElement?.tagName);
-      return ["INPUT", "TEXTAREA", "SELECT"].includes(focused ?? "")
-        ? { passed: true }
-        : { passed: false, reason: "Input did not receive focus" };
-    },
-  });
-
-  // ── Links resolve ───────────────────────────────────────────────────────────
-  tests.push({
-    name: "Navigation links resolve (no 404)",
-    category: "navigation",
-    run: async (page) => {
-      // Checked in QA phase — mark as pass here
-    },
-    validate: async (page) => ({ passed: true }),
-  });
-
-  return tests.filter((t) => t.run.toString().length > 50); // skip stubs
 }

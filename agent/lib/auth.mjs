@@ -1,94 +1,122 @@
 /**
- * Auth module — login to the live app and save/reuse session state.
- * Reuses saved session if it exists and is less than SESSION_MAX_AGE_MS old.
+ * Login + session capture.
+ *
+ * Flow:
+ *  1. Launch browser, go to source URL.
+ *  2. If redirected to login (URL contains "login" OR password field present) → fill and submit.
+ *  3. After login → force-navigate back to source URL (per user requirement).
+ *  4. Verify we are no longer on login. Save storage state.
+ *
+ * Credentials come from env (LOGIN_EMAIL / LOGIN_PASSWORD) — never from the user form.
  */
 
-import { launchBrowser, newContext } from "./browser.mjs";
-import { writeFileSync, existsSync, statSync } from "fs";
-import { dirname, resolve } from "path";
-import { mkdirSync } from "fs";
+import { chromium } from "playwright";
+import { writeFileSync, mkdirSync } from "fs";
+import { dirname } from "path";
 
-const SESSION_MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
+export async function loginAndCaptureSession({ liveUrl, sessionPath }) {
+  const email    = process.env.LOGIN_EMAIL;
+  const password = process.env.LOGIN_PASSWORD;
+  if (!email || !password) throw new Error("LOGIN_EMAIL / LOGIN_PASSWORD missing in env");
 
-export async function ensureSession(config) {
-  const sessionPath = config.sessionPath;
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page    = await context.newPage();
 
-  if (existsSync(sessionPath)) {
-    const age = Date.now() - statSync(sessionPath).mtimeMs;
-    if (age < SESSION_MAX_AGE_MS) {
-      console.log(`  Auth: reusing saved session (${Math.round(age / 60000)}m old)`);
-      return sessionPath;
-    }
-    console.log("  Auth: session expired, re-logging in…");
-  } else {
-    console.log("  Auth: no session found, logging in…");
+  console.log(`   → navigating to ${liveUrl}`);
+  await page.goto(liveUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+
+  // Detect login page
+  const needsLogin = await detectLoginPage(page);
+  if (needsLogin) {
+    console.log(`   → login page detected, submitting credentials`);
+    await performLogin(page, email, password);
+    await waitForPostLogin(page);
+
+    // Force-navigate to source URL per user requirement
+    console.log(`   → navigating back to source URL: ${liveUrl}`);
+    await page.goto(liveUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   }
 
-  await login(config);
-  return sessionPath;
+  // Verify we are authenticated (not still on login)
+  const stillLogin = await detectLoginPage(page);
+  if (stillLogin) {
+    await browser.close();
+    throw new Error("Login failed — still on login page after submission");
+  }
+
+  // Save cookies / localStorage
+  mkdirSync(dirname(sessionPath), { recursive: true });
+  const state = await context.storageState();
+  writeFileSync(sessionPath, JSON.stringify(state, null, 2));
+
+  await browser.close();
+  console.log(`   → session saved to ${sessionPath}`);
 }
 
-async function login(config) {
-  const browser = await launchBrowser(true);
+async function detectLoginPage(page) {
+  const url = page.url().toLowerCase();
+  if (url.includes("/login") || url.includes("/signin") || url.includes("/auth")) return true;
+  // Fallback: look for password input
+  const hasPasswordField = await page.locator('input[type="password"]').count();
+  return hasPasswordField > 0;
+}
+
+async function performLogin(page, email, password) {
+  const emailSelectors = [
+    'input[type="email"]',
+    'input[name="email"]',
+    'input[id*="email" i]',
+    'input[placeholder*="email" i]',
+    'input[name="username"]',
+  ];
+  const passwordSelectors = [
+    'input[type="password"]',
+    'input[name="password"]',
+  ];
+
+  const emailInput = await findFirst(page, emailSelectors);
+  if (!emailInput) throw new Error("Could not find email/username input");
+  await emailInput.fill(email);
+
+  const pwdInput = await findFirst(page, passwordSelectors);
+  if (!pwdInput) throw new Error("Could not find password input");
+  await pwdInput.fill(password);
+
+  // Try to submit via Enter first (most reliable for SPAs)
+  await pwdInput.press("Enter");
+
+  // If that doesn't navigate, click a submit button
   try {
-    const context = await newContext(browser, null);
-    const page = await context.newPage();
-
-    await page.goto(config.loginUrl, { waitUntil: "networkidle", timeout: 30000 });
-    await page.waitForTimeout(1500);
-
-    // Fill email
-    const emailSel = [
-      'input[type="email"]',
-      'input[name="email"]',
-      'input[placeholder*="email" i]',
-      'input[autocomplete="email"]',
-    ];
-    for (const sel of emailSel) {
-      if ((await page.locator(sel).count()) > 0) {
-        await page.fill(sel, config.loginEmail);
-        break;
-      }
-    }
-
-    // Fill password
-    const passSel = [
-      'input[type="password"]',
-      'input[name="password"]',
-      'input[placeholder*="password" i]',
-    ];
-    for (const sel of passSel) {
-      if ((await page.locator(sel).count()) > 0) {
-        await page.fill(sel, config.loginPassword);
-        break;
-      }
-    }
-
-    // Submit
-    const submitSel = [
+    await page.waitForURL((u) => !u.toString().toLowerCase().match(/\/(login|signin|auth)/), { timeout: 8000 });
+  } catch {
+    const submitSelectors = [
       'button[type="submit"]',
-      'button:has-text("Log in")',
       'button:has-text("Sign in")',
+      'button:has-text("Log in")',
       'button:has-text("Login")',
       'input[type="submit"]',
     ];
-    for (const sel of submitSel) {
-      if ((await page.locator(sel).count()) > 0) {
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {}),
-          page.click(sel),
-        ]);
-        break;
-      }
-    }
+    const btn = await findFirst(page, submitSelectors);
+    if (btn) await btn.click();
+  }
+}
 
-    await page.waitForTimeout(2000);
+async function findFirst(page, selectors) {
+  for (const s of selectors) {
+    const loc = page.locator(s).first();
+    if (await loc.count()) return loc;
+  }
+  return null;
+}
 
-    // Save session
-    mkdirSync(dirname(resolve(config.sessionPath)), { recursive: true });
-    await context.storageState({ path: config.sessionPath });
-    console.log(`  Auth: logged in, session saved to ${config.sessionPath}`);
-  } finally {
-    await browser.close();
+async function waitForPostLogin(page) {
+  // Wait for URL to leave login, or network to settle
+  try {
+    await page.waitForURL((u) => !u.toString().toLowerCase().match(/\/(login|signin|auth)/), { timeout: 15000 });
+  } catch {
+    // fallback: just settle network
+    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   }
 }
