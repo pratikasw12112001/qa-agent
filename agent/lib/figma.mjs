@@ -8,7 +8,14 @@
  *   - Extract prototype interactions (for functional test generation)
  */
 
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from "fs";
+import { join } from "path";
+
+function statMtime(p) { return statSync(p).mtimeMs; }
+
 const BASE = "https://api.figma.com/v1";
+const CACHE_DIR = join(process.cwd(), ".cache", "figma");
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function headers(token) { return { "X-Figma-Token": token }; }
 
@@ -18,12 +25,37 @@ export function extractFileKey(url) {
   return m[1];
 }
 
+/** Fetch with retry on 429 (exponential backoff). */
+async function figmaFetch(url, token) {
+  const delays = [2000, 5000, 12000, 30000, 60000];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    const res = await fetch(url, { headers: headers(token) });
+    if (res.ok) return res;
+    if (res.status !== 429 || attempt === delays.length) {
+      throw new Error(`Figma API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    }
+    const wait = delays[attempt];
+    console.log(`   Figma 429 — retrying in ${wait / 1000}s (attempt ${attempt + 1}/${delays.length})`);
+    await new Promise((r) => setTimeout(r, wait));
+  }
+  throw new Error("Figma retry budget exhausted");
+}
+
 /** Fetch all "real" frames across all pages. */
 export async function fetchFrames(figmaUrl, token) {
   const fileKey = extractFileKey(figmaUrl);
-  const res = await fetch(`${BASE}/files/${fileKey}?depth=5`, { headers: headers(token) });
-  if (!res.ok) throw new Error(`Figma API ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = await res.json();
+
+  if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+  const cacheFile = join(CACHE_DIR, `${fileKey}.json`);
+  let data;
+  if (existsSync(cacheFile) && Date.now() - statMtime(cacheFile) < CACHE_TTL_MS) {
+    console.log("   (using cached Figma file response)");
+    data = JSON.parse(readFileSync(cacheFile, "utf8"));
+  } else {
+    const res = await figmaFetch(`${BASE}/files/${fileKey}?depth=5`, token);
+    data = await res.json();
+    writeFileSync(cacheFile, JSON.stringify(data));
+  }
 
   const frames = [];
   for (const page of data.document.children ?? []) {
@@ -59,11 +91,10 @@ export async function fetchFrames(figmaUrl, token) {
 
 /** Export a single frame as a PNG buffer. */
 export async function exportFramePng(fileKey, nodeId, token, scale = 1) {
-  const res = await fetch(
+  const res = await figmaFetch(
     `${BASE}/images/${fileKey}?ids=${encodeURIComponent(nodeId)}&format=png&scale=${scale}`,
-    { headers: headers(token) }
+    token
   );
-  if (!res.ok) throw new Error(`Figma export ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
   const imageUrl = data.images?.[nodeId];
   if (!imageUrl) throw new Error(`No image URL for node ${nodeId}`);

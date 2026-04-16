@@ -36,19 +36,51 @@ export default function ReportPage() {
   const done = progress.status === "done";
   const err  = progress.status === "error";
 
+  if (done && progress.reportUrl) {
+    return (
+      <main style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#0b1020" }}>
+        <header style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "12px 20px", borderBottom: "1px solid #1e2640", background: "#0b1020",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+            <a href="/" style={{ color: "#94a3b8", fontSize: "13px", textDecoration: "none" }}>← New run</a>
+            <span style={{ color: "#475569", fontSize: "13px" }}>|</span>
+            <span style={{ color: "#94a3b8", fontSize: "13px" }}>
+              Run <code style={{ background: "#111827", padding: "2px 6px", borderRadius: "4px" }}>{runId}</code>
+            </span>
+          </div>
+          <a
+            href={progress.reportUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: "#3b82f6", fontSize: "13px", textDecoration: "none" }}
+          >
+            Open in new tab ↗
+          </a>
+        </header>
+        <iframe
+          src={progress.reportUrl}
+          style={{ flex: 1, width: "100%", border: "none", background: "#fff" }}
+          title={`QA Report ${runId}`}
+        />
+      </main>
+    );
+  }
+
   return (
     <main style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
       <div style={{ width: "100%", maxWidth: "620px", textAlign: "center" }}>
-        <div style={{ fontSize: "40px", marginBottom: "14px" }}>{err ? "✖" : done ? "✅" : "⏳"}</div>
+        <div style={{ fontSize: "40px", marginBottom: "14px" }}>{err ? "✖" : "⏳"}</div>
         <h1 style={{ fontSize: "24px", fontWeight: 800, marginBottom: "6px" }}>
-          {err ? "Run failed" : done ? "Report ready" : "Running QA agent…"}
+          {err ? "Run failed" : "Running QA agent…"}
         </h1>
         <p style={{ color: "#94a3b8", fontSize: "14px", marginBottom: "28px" }}>
           Run <code style={{ background: "#111827", padding: "2px 6px", borderRadius: "4px" }}>{runId}</code>
-          {!done && !err && ` · elapsed ${formatTime(elapsed)}`}
+          {!err && ` · elapsed ${formatTime(elapsed)}`}
         </p>
 
-        {!done && !err && (
+        {!err && (
           <div style={{ background: "#111827", border: "1px solid #1e2640", borderRadius: "12px", padding: "24px", marginBottom: "18px" }}>
             <div style={{ color: "#94a3b8", fontSize: "13px", marginBottom: "10px" }}>Status: {progress.status}</div>
             <div style={{ height: "6px", background: "#1e2640", borderRadius: "3px", overflow: "hidden" }}>
@@ -63,19 +95,6 @@ export default function ReportPage() {
               Typical run: 3-6 min · polling every 5 sec
             </p>
           </div>
-        )}
-
-        {done && progress.reportUrl && (
-          <a
-            href={progress.reportUrl}
-            style={{
-              display: "inline-block", background: "#3b4fd8", color: "#fff",
-              padding: "14px 28px", borderRadius: "10px", textDecoration: "none",
-              fontSize: "15px", fontWeight: 700,
-            }}
-          >
-            Open Report →
-          </a>
         )}
 
         {err && (
