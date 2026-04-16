@@ -13,7 +13,7 @@
  */
 
 export function generateReport({
-  runId, meta, frames, states, matches, findings, functional, prdAcs, aiStats,
+  runId, meta, frames, states, matches, findings, functional, prdAcs, aiStats, warnings = [],
 }) {
   const score = computeScore(findings, matches, functional);
   const now = new Date().toISOString();
@@ -97,6 +97,12 @@ export function generateReport({
 </head>
 <body>
 <div class="wrap">
+
+  ${warnings.length ? `
+  <div style="background:rgba(234,179,8,.1);border:1px solid rgba(234,179,8,.3);border-radius:10px;padding:14px 18px;margin-bottom:18px">
+    <div style="font-weight:700;color:#fde68a;margin-bottom:6px">⚠ Partial run — some steps were skipped</div>
+    ${warnings.map(w => `<div style="font-size:13px;color:#fcd34d;margin-bottom:4px"><strong>${escapeHtml(w.step)}:</strong> ${escapeHtml(w.message.slice(0, 200))}</div>`).join("")}
+  </div>` : ""}
 
   <div class="hero">
     <h1>Frontend QA Report</h1>
