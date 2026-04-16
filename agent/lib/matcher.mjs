@@ -9,7 +9,7 @@
  */
 
 import { askVision, parseJsonLoose } from "./ai.mjs";
-import { exportFramePng } from "./figma.mjs";
+import { exportFramesPngBatch } from "./figma.mjs";
 
 export async function matchStatesToFrames({
   states, frames, fileKey, figmaToken, thresholds,
@@ -17,15 +17,17 @@ export async function matchStatesToFrames({
   const W = thresholds.matching;
   const topK = W.topCandidatesForVision ?? 3;
 
-  // Pre-export all frame PNGs (cached by Figma on their side, and we cache AI calls)
+  // Pre-export ALL frame PNGs in ONE batch Figma API call
   const framePngs = new Map();
-  for (const f of frames) {
-    try {
-      const buf = await exportFramePng(fileKey, f.id, figmaToken, 1);
-      framePngs.set(f.id, buf.toString("base64"));
-    } catch (e) {
-      console.warn(`   ⚠ Figma export failed for ${f.name}: ${e.message.slice(0, 60)}`);
+  try {
+    const nodeIds = frames.map((f) => f.id);
+    const batchResult = await exportFramesPngBatch(fileKey, nodeIds, figmaToken, 1);
+    for (const [id, buf] of Object.entries(batchResult)) {
+      framePngs.set(id, buf.toString("base64"));
     }
+    console.log(`   Exported ${framePngs.size}/${frames.length} frame PNGs`);
+  } catch (e) {
+    console.warn(`   ⚠ Batch Figma export failed: ${e.message.slice(0, 80)}`);
   }
 
   const results = [];
