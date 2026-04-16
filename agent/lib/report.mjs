@@ -239,16 +239,20 @@ function renderStateFindings(states, matches, allFindings, frames) {
     const frame = m?.frameId ? frames.find((f) => f.id === m.frameId) : null;
     const findings = allFindings.filter((f) => f.stateId === s.id);
 
-    const imgs = (m?.framePng && s.screenshot) ? `
-      <div class="state-images">
-        <figure><figcaption>LIVE · ${escapeHtml(s.url)}</figcaption>
-          <img src="data:image/png;base64,${s.screenshot}" alt="live"></figure>
-        <figure><figcaption>FIGMA · ${escapeHtml(frame?.name ?? "—")}</figcaption>
-          <img src="data:image/png;base64,${m.framePng}" alt="figma"></figure>
-      </div>` : s.screenshot ? `
-      <div class="state-images">
-        <figure><figcaption>LIVE · ${escapeHtml(s.url)}</figcaption>
-          <img src="data:image/png;base64,${s.screenshot}" alt="live"></figure>
+    const liveImg  = s.screenshot ? `<figure style="margin:0">
+        <figcaption style="font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em">LIVE · ${escapeHtml(s.url)}</figcaption>
+        <img src="data:image/png;base64,${s.screenshot}" alt="live" style="width:100%;border:1px solid var(--border);border-radius:8px;background:#000">
+      </figure>` : "";
+    const figmaImg = m?.framePng ? `<figure style="margin:0">
+        <figcaption style="font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em">FIGMA · ${escapeHtml(frame?.name ?? "—")}</figcaption>
+        <img src="data:image/png;base64,${m.framePng}" alt="figma" style="width:100%;border:1px solid var(--border);border-radius:8px;background:#fff">
+      </figure>` : `<figure style="margin:0">
+        <figcaption style="font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em">FIGMA · no match</figcaption>
+        <div style="width:100%;height:200px;border:1px dashed var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px">No Figma frame matched</div>
+      </figure>`;
+    const imgs = (liveImg || figmaImg) ? `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        ${liveImg}${figmaImg}
       </div>` : "";
 
     const errs  = findings.filter((f) => f.severity === "error").length;
