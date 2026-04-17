@@ -123,16 +123,31 @@ async function main() {
   }
 
   // ── 5. Compare each pair ──────────────────────────────────────────────────
-  const findings = [];
+  const findings      = [];
+  const frameAnalyses = [];   // rich per-frame analysis for the deep-dive section
   if (matches.length > 0) {
     console.log("\n▶  Comparing matched pairs");
     for (const state of states) {
       const m = matches.find((x) => x.stateId === state.id);
       if (!m || !m.frameId) continue;
       const frame = frames.find((f) => f.id === m.frameId);
-      const f = await compareStateToFrame({ state, match: m, frame });
+      const { findings: f, analysis } = await compareStateToFrame({ state, match: m, frame });
       for (const item of f) findings.push({ ...item, stateId: state.id });
-      console.log(`   ${state.id} → ${frame?.name}: ${f.length} finding(s)`);
+      if (analysis) {
+        frameAnalyses.push({
+          stateId:        state.id,
+          frameId:        m.frameId,
+          frameName:      m.frameName ?? frame?.name ?? "—",
+          frameScore:     analysis.frameScore,
+          summary:        analysis.summary,
+          analysis,
+          liveScreenshot: state.screenshot,
+          figmaScreenshot: m.framePng,
+          liveUrl:        state.url,
+          triggerDesc:    state.triggerDesc,
+        });
+      }
+      console.log(`   ${state.id} → ${frame?.name}: ${f.length} finding(s) · score: ${analysis?.frameScore ?? "?"}/100`);
     }
   } else {
     console.log("\n▶  Comparison — skipped (no matches)");
@@ -177,7 +192,7 @@ async function main() {
   const html = generateReport({
     runId: cfg.runId,
     meta: { liveUrl: cfg.liveUrl, figmaFileKey: fileKey },
-    frames, states, matches, findings, functional, prdAcs,
+    frames, states, matches, findings, frameAnalyses, functional, prdAcs,
     warnings,
     aiStats: getAiStats(),
   });

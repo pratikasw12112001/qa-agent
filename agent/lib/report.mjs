@@ -13,7 +13,7 @@
  */
 
 export function generateReport({
-  runId, meta, frames, states, matches, findings, functional, prdAcs, aiStats, warnings = [],
+  runId, meta, frames, states, matches, findings, frameAnalyses = [], functional, prdAcs, aiStats, warnings = [],
 }) {
   const score = computeScore(findings, matches, functional);
   const now = new Date().toISOString();
@@ -93,6 +93,42 @@ export function generateReport({
   details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   pre { background: #0e1626; border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 11px; }
   footer { color: var(--dim); font-size: 12px; text-align: center; padding: 14px; }
+
+  /* Frame deep-analysis styles */
+  .fa-frame { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; margin-bottom: 24px; overflow: hidden; }
+  .fa-header { background: var(--panel); padding: 18px 22px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+  .fa-header h3 { margin: 0; font-size: 16px; }
+  .fa-header .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .score-ring { width: 72px; height: 72px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; font-size: 22px; flex-shrink: 0; border: 4px solid; }
+  .score-ring .ring-label { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; margin-top: 1px; }
+  .fa-screenshots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 22px; border-bottom: 1px solid var(--border); }
+  .fa-cat { padding: 14px 22px; border-bottom: 1px solid var(--border); }
+  .fa-cat:last-child { border-bottom: none; }
+  .fa-cat-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .fa-cat-title .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  .fa-row { display: grid; gap: 8px; grid-template-columns: 1fr 2fr; font-size: 13px; padding: 6px 0; border-bottom: 1px solid #1a2235; }
+  .fa-row:last-child { border-bottom: none; }
+  .fa-key { color: var(--muted); font-size: 12px; }
+  .status-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .status-matches { background: rgba(34,197,94,.15); color: #86efac; }
+  .status-partial  { background: rgba(234,179,8,.15); color: #fde68a; }
+  .status-deviates { background: rgba(239,68,68,.15); color: #fca5a5; }
+  .status-present  { background: rgba(34,197,94,.15); color: #86efac; }
+  .status-missing  { background: rgba(239,68,68,.15); color: #fca5a5; }
+  .status-wrong    { background: rgba(234,179,8,.15); color: #fde68a; }
+  .sev-ok    { color: #86efac; }
+  .sev-warn  { color: #fde68a; }
+  .sev-error { color: #fca5a5; }
+
+  /* Combined assessment */
+  .combined { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: start; }
+  .combined-score { text-align: center; }
+  .combined-score .big-score { font-size: 72px; font-weight: 900; line-height: 1; }
+  .combined-score .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .insight-list { list-style: none; padding: 0; margin: 0; }
+  .insight-list li { padding: 6px 0; font-size: 14px; border-bottom: 1px solid var(--border); }
+  .insight-list li:last-child { border-bottom: none; }
+  .insight-list li::before { content: "→ "; color: var(--blue); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -144,6 +180,17 @@ export function generateReport({
     <h2>Visual &amp; Content Findings <span class="aud">Designer / QA</span></h2>
     ${renderStateFindings(states, matches, findings, frames)}
   </section>
+
+  ${frameAnalyses.length ? `
+  <section>
+    <h2>Frame-by-Frame Deep Analysis <span class="aud">Designer / QA</span></h2>
+    ${renderFrameAnalyses(frameAnalyses)}
+  </section>
+
+  <section>
+    <h2>Combined Assessment <span class="aud">PM / Lead</span></h2>
+    ${renderCombinedAssessment(frameAnalyses)}
+  </section>` : ""}
 
   <section>
     <h2>Functional Tests <span class="aud">QA</span></h2>
@@ -374,6 +421,217 @@ function renderPrd(acs) {
       </tr>`).join("")}
     </tbody>
   </table>`;
+}
+
+// ─── frame-by-frame deep analysis ──────────────────────────────────────────
+
+function renderFrameAnalyses(frameAnalyses) {
+  if (!frameAnalyses.length) return `<p style="color:var(--muted)">No frame analyses available.</p>`;
+  return frameAnalyses.map((fa) => renderOneFrameAnalysis(fa)).join("");
+}
+
+function renderOneFrameAnalysis(fa) {
+  const a = fa.analysis;
+  const score = fa.frameScore ?? 0;
+  const ringColor = score >= 75 ? "#22c55e" : score >= 50 ? "#eab308" : "#ef4444";
+
+  // Score ring
+  const ring = `
+    <div class="score-ring" style="border-color:${ringColor};color:${ringColor}">
+      ${score}
+      <span class="ring-label" style="color:var(--muted)">/ 100</span>
+    </div>`;
+
+  // Screenshots
+  const screenshots = (fa.liveScreenshot || fa.figmaScreenshot) ? `
+    <div class="fa-screenshots">
+      ${fa.liveScreenshot ? `
+        <div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;font-weight:600">
+            LIVE · <span style="text-transform:none;font-weight:400">${escapeHtml(fa.liveUrl ?? "")}</span>
+          </div>
+          <img src="data:image/png;base64,${fa.liveScreenshot}" style="width:100%;border:2px solid #3b82f6;border-radius:8px;display:block">
+        </div>` : ""}
+      ${fa.figmaScreenshot ? `
+        <div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;font-weight:600">
+            FIGMA · <span style="text-transform:none;font-weight:400">${escapeHtml(fa.frameName)}</span>
+          </div>
+          <img src="data:image/png;base64,${fa.figmaScreenshot}" style="width:100%;border:2px solid #22c55e;border-radius:8px;display:block;background:#fff">
+        </div>` : ""}
+    </div>` : "";
+
+  // Design Patterns
+  const dpStatus = a.designPatterns?.status ?? "unknown";
+  const dpClass  = dpStatus === "matches" ? "status-matches" : dpStatus === "partial" ? "status-partial" : "status-deviates";
+  const designPatterns = `
+    <div class="fa-cat">
+      <div class="fa-cat-title">Design Patterns
+        <span class="status-badge ${dpClass}">${escapeHtml(dpStatus)}</span>
+      </div>
+      <p style="font-size:13px;margin:0;color:var(--text)">${escapeHtml(a.designPatterns?.notes ?? "No notes.")}</p>
+    </div>`;
+
+  // Interactions
+  const interactions = (a.interactions?.length) ? `
+    <div class="fa-cat">
+      <div class="fa-cat-title">Interactions</div>
+      ${a.interactions.map((it) => `
+        <div class="fa-row">
+          <div class="fa-key">${escapeHtml(it.element ?? "")}</div>
+          <div>
+            <span class="status-badge status-${it.status ?? "wrong"}">${escapeHtml(it.status ?? "")}</span>
+            <span style="font-size:13px;margin-left:8px">${escapeHtml(it.note ?? "")}</span>
+          </div>
+        </div>`).join("")}
+    </div>` : "";
+
+  // Spacing
+  const spacing = (a.spacing?.length) ? `
+    <div class="fa-cat">
+      <div class="fa-cat-title">Spacing &amp; Layout</div>
+      ${a.spacing.map((sp) => `
+        <div class="fa-row">
+          <div class="fa-key">${escapeHtml(sp.area ?? "")}</div>
+          <div class="sev-${sp.severity ?? "warn"}">${escapeHtml(sp.note ?? "")}</div>
+        </div>`).join("")}
+    </div>` : "";
+
+  // Colors
+  const colors = (a.colors?.length) ? `
+    <div class="fa-cat">
+      <div class="fa-cat-title">Color Style</div>
+      <table style="font-size:13px">
+        <thead><tr><th>Element</th><th>Live</th><th>Figma</th><th>Status</th></tr></thead>
+        <tbody>
+          ${a.colors.map((c) => `
+            <tr>
+              <td>${escapeHtml(c.element ?? "")}</td>
+              <td style="font-family:monospace">${escapeHtml(c.liveColor ?? "")}</td>
+              <td style="font-family:monospace">${escapeHtml(c.figmaColor ?? "")}</td>
+              <td class="sev-${c.severity ?? "ok"}">${escapeHtml(c.severity ?? "ok")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>` : "";
+
+  // Inaccuracies
+  const inaccuracies = (a.inaccuracies?.length) ? `
+    <div class="fa-cat">
+      <div class="fa-cat-title">Inaccuracies</div>
+      ${a.inaccuracies.map((inc) => `
+        <div class="finding ${inc.severity === "error" ? "error" : inc.severity === "warn" ? "warn" : "info"}">
+          <div class="head">
+            <span>${escapeHtml((inc.type ?? "general").toUpperCase())}</span>
+            <span>·</span><span>${escapeHtml(inc.severity ?? "info")}</span>
+          </div>
+          <div class="desc">${escapeHtml(inc.description ?? "")}</div>
+        </div>`).join("")}
+    </div>` : "";
+
+  return `
+  <div class="fa-frame">
+    <div class="fa-header">
+      <div>
+        <h3>${escapeHtml(fa.stateId)} — ${escapeHtml(fa.frameName)}</h3>
+        <div class="sub">${escapeHtml(fa.triggerDesc ?? "")} · ${escapeHtml(fa.liveUrl ?? "")}</div>
+        ${fa.summary ? `<div style="font-size:13px;margin-top:8px;color:var(--text);font-style:italic">"${escapeHtml(fa.summary)}"</div>` : ""}
+      </div>
+      ${ring}
+    </div>
+    ${screenshots}
+    ${designPatterns}
+    ${interactions}
+    ${spacing}
+    ${colors}
+    ${inaccuracies}
+  </div>`;
+}
+
+// ─── combined assessment ────────────────────────────────────────────────────
+
+function renderCombinedAssessment(frameAnalyses) {
+  if (!frameAnalyses.length) return `<p style="color:var(--muted)">No analysis data.</p>`;
+
+  const scores = frameAnalyses.map((fa) => fa.frameScore ?? 0);
+  const avg    = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+  const color  = avg >= 75 ? "#22c55e" : avg >= 50 ? "#eab308" : "#ef4444";
+
+  // Aggregate theme counts
+  const dpCounts = { matches: 0, partial: 0, deviates: 0, unknown: 0 };
+  let totalInaccuracies = 0, totalColorIssues = 0, totalSpacingIssues = 0, totalMissingInteractions = 0;
+
+  for (const fa of frameAnalyses) {
+    const a = fa.analysis;
+    const dp = a.designPatterns?.status ?? "unknown";
+    dpCounts[dp] = (dpCounts[dp] ?? 0) + 1;
+    totalInaccuracies     += (a.inaccuracies ?? []).filter((x) => x.severity === "error" || x.severity === "warn").length;
+    totalColorIssues      += (a.colors       ?? []).filter((x) => x.severity !== "ok").length;
+    totalSpacingIssues    += (a.spacing      ?? []).filter((x) => x.severity !== "ok").length;
+    totalMissingInteractions += (a.interactions ?? []).filter((x) => x.status === "missing").length;
+  }
+
+  // Build insights list
+  const insights = [];
+  if (dpCounts.matches > 0)
+    insights.push(`${dpCounts.matches} of ${frameAnalyses.length} frame(s) have design patterns matching the Figma spec.`);
+  if (dpCounts.deviates > 0)
+    insights.push(`${dpCounts.deviates} frame(s) show significant layout/pattern deviations from Figma.`);
+  if (dpCounts.partial > 0)
+    insights.push(`${dpCounts.partial} frame(s) partially match the design — needs designer review.`);
+  if (totalMissingInteractions > 0)
+    insights.push(`${totalMissingInteractions} interaction element(s) are missing or incorrectly implemented.`);
+  if (totalColorIssues > 0)
+    insights.push(`${totalColorIssues} color / style discrepancies found across all frames.`);
+  if (totalSpacingIssues > 0)
+    insights.push(`${totalSpacingIssues} spacing / padding issues detected.`);
+  if (totalInaccuracies > 0)
+    insights.push(`${totalInaccuracies} content or visual inaccuracy(ies) flagged (errors + warnings).`);
+  if (insights.length === 0)
+    insights.push("All analyzed frames are consistent with the Figma design.");
+
+  // Per-frame score table
+  const scoreTable = `
+    <table style="margin-top:16px">
+      <thead><tr><th>State</th><th>Figma Frame</th><th>Score</th><th>Design Patterns</th><th>Summary</th></tr></thead>
+      <tbody>
+        ${frameAnalyses.map((fa) => {
+          const s = fa.frameScore ?? 0;
+          const c = s >= 75 ? "#22c55e" : s >= 50 ? "#eab308" : "#ef4444";
+          const dp = fa.analysis.designPatterns?.status ?? "—";
+          return `<tr>
+            <td><code>${escapeHtml(fa.stateId)}</code></td>
+            <td>${escapeHtml(fa.frameName)}</td>
+            <td style="font-weight:700;color:${c}">${s} / 100</td>
+            <td><span class="status-badge status-${dp}">${escapeHtml(dp)}</span></td>
+            <td style="font-size:12px;color:var(--muted)">${escapeHtml((fa.summary ?? "").slice(0, 100))}</td>
+          </tr>`;
+        }).join("")}
+        <tr style="border-top:2px solid var(--border)">
+          <td colspan="2" style="font-weight:700">COMBINED AVERAGE</td>
+          <td style="font-weight:900;font-size:18px;color:${color}">${avg} / 100</td>
+          <td colspan="2" style="color:var(--muted);font-size:12px">${frameAnalyses.length} frame(s) analyzed</td>
+        </tr>
+      </tbody>
+    </table>`;
+
+  return `
+    <div class="combined">
+      <div class="combined-score">
+        <div class="big-score" style="color:${color}">${avg}</div>
+        <div class="label">Overall Score</div>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">out of 100</div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">
+          Summary Insights
+        </div>
+        <ul class="insight-list">
+          ${insights.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}
+        </ul>
+      </div>
+    </div>
+    ${scoreTable}`;
 }
 
 function escapeHtml(s) {

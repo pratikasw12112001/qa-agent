@@ -1,18 +1,21 @@
 /**
  * Visual + content comparison between a matched (live state, figma frame) pair.
  *
- * Produces a list of findings, each:
- *   { category, severity, description, evidence }
+ * Produces:
+ *   - findings[]: flat list of { category, severity, description, evidence }
+ *   - analysis:   rich per-frame breakdown (designPatterns, interactions,
+ *                 spacing, colors, inaccuracies, frameScore, summary)
  *
  * Combines:
- *   - Missing-text presence check  (free, DOM-based)
- *   - AI-powered style/layout diff (one cheap vision call per pair)
+ *   - Missing-text presence check    (free, DOM-based)
+ *   - AI deep analysis               (one vision call per matched pair)
  */
 
 import { askVision, parseJsonLoose } from "./ai.mjs";
 
 export async function compareStateToFrame({ state, match, frame }) {
   const findings = [];
+  let analysis   = null;
 
   if (!match.frameId) {
     findings.push({
@@ -20,24 +23,50 @@ export async function compareStateToFrame({ state, match, frame }) {
       description: `State "${state.id}" could not be matched to any Figma frame (low similarity across all signals)`,
       evidence: `confidence: ${match.confidence.toFixed(2)}`,
     });
-    return findings;
+    return { findings, analysis };
   }
 
   // 1. Missing-text presence (free, deterministic)
   findings.push(...presenceChecks(state, frame));
 
-  // 2. AI visual diff — one vision call per pair (top-level differences only)
+  // 2. Deep AI analysis — one vision call per pair
   if (match.framePng) {
-    const diffs = await visionDiff(state.screenshot, match.framePng, frame.name);
-    for (const d of diffs) findings.push({
-      category: d.category ?? "visual",
-      severity: normalizeSeverity(d.severity),
-      description: d.description,
-      evidence: d.evidence ?? "",
-    });
+    analysis = await visionAnalysis(state.screenshot, match.framePng, frame.name);
+
+    // Flatten analysis into findings for backward-compat sections
+    if (Array.isArray(analysis.inaccuracies)) {
+      for (const inc of analysis.inaccuracies) {
+        findings.push({
+          category: inc.type ?? "visual",
+          severity: normalizeSeverity(inc.severity),
+          description: inc.description,
+          evidence: frame.name,
+        });
+      }
+    }
+    if (Array.isArray(analysis.spacing)) {
+      for (const s of analysis.spacing.filter((x) => x.severity !== "ok")) {
+        findings.push({
+          category: "spacing",
+          severity: normalizeSeverity(s.severity),
+          description: s.note,
+          evidence: s.area,
+        });
+      }
+    }
+    if (Array.isArray(analysis.colors)) {
+      for (const c of analysis.colors.filter((x) => x.severity !== "ok")) {
+        findings.push({
+          category: "color",
+          severity: normalizeSeverity(c.severity),
+          description: `${c.element}: live "${c.liveColor}" vs figma "${c.figmaColor}"`,
+          evidence: frame.name,
+        });
+      }
+    }
   }
 
-  return findings;
+  return { findings, analysis };
 }
 
 // ─── presence checks ────────────────────────────────────────────────────────
@@ -79,19 +108,27 @@ function presenceChecks(state, frame) {
   return findings;
 }
 
-// ─── vision diff ────────────────────────────────────────────────────────────
+// ─── deep vision analysis ─────────────────────────────────────────────────────
 
-async function visionDiff(liveB64, figmaB64, frameName) {
+async function visionAnalysis(liveB64, figmaB64, frameName) {
   const system =
-    "You are a UI QA reviewer. Given a LIVE app screenshot and a FIGMA design, " +
-    "list the top 0-6 IMPORTANT visual differences (layout, color, typography, spacing, missing elements). " +
-    "Skip minor pixel differences. Ignore dynamic content like dates, numbers, user names. " +
-    "Return JSON only.";
+    "You are a senior UI/UX QA engineer. Compare a LIVE app screenshot against a FIGMA design frame " +
+    "and produce a detailed structured analysis. Be specific and actionable. " +
+    "Score: 0 = completely wrong, 100 = pixel-perfect match. Return JSON only.";
 
   const user =
-    `Compare LIVE vs FIGMA (frame "${frameName}"). ` +
-    `Return JSON: { "differences": [ { "category": "layout|color|typography|spacing|missing|copy", "severity": "error|warn|info", "description": "short", "evidence": "where on screen" } ] }. ` +
-    `Limit to the 6 most impactful differences. If nearly identical, return differences: [].`;
+    `Deeply analyze LIVE vs FIGMA frame "${frameName}". Return JSON:\n` +
+    `{\n` +
+    `  "frameScore": <0-100 integer>,\n` +
+    `  "summary": "<1-2 sentence overall assessment>",\n` +
+    `  "designPatterns": { "status": "matches|deviates|partial", "notes": "<layout, component patterns, visual hierarchy observation>" },\n` +
+    `  "interactions": [ { "element": "<button/input/tab/etc>", "status": "present|missing|wrong", "note": "<detail>" } ],\n` +
+    `  "spacing": [ { "area": "<location>", "severity": "ok|warn|error", "note": "<padding/margin/gap observation>" } ],\n` +
+    `  "colors": [ { "element": "<component>", "liveColor": "<observed>", "figmaColor": "<expected>", "severity": "ok|warn|error" } ],\n` +
+    `  "inaccuracies": [ { "type": "text|icon|image|layout|typography", "description": "<specific inaccuracy>", "severity": "error|warn|info" } ]\n` +
+    `}\n` +
+    `Max 5 items per array. Ignore dynamic content (dates, user-specific data). ` +
+    `frameScore reflects overall fidelity to the Figma design.`;
 
   const raw = await askVision(system, user, [
     { label: "LIVE",  base64: liveB64 },
@@ -99,8 +136,23 @@ async function visionDiff(liveB64, figmaB64, frameName) {
   ], { json: true });
 
   const j = parseJsonLoose(raw);
-  if (!j || !Array.isArray(j.differences)) return [];
-  return j.differences.slice(0, 8);
+  if (!j) {
+    return {
+      frameScore: 0, summary: "Analysis failed — could not parse AI response.",
+      designPatterns: { status: "unknown", notes: "" },
+      interactions: [], spacing: [], colors: [], inaccuracies: [],
+    };
+  }
+  // Normalise: clamp score, ensure arrays
+  return {
+    frameScore:     Math.max(0, Math.min(100, Math.round(j.frameScore ?? 0))),
+    summary:        j.summary ?? "",
+    designPatterns: j.designPatterns ?? { status: "unknown", notes: "" },
+    interactions:   (j.interactions  ?? []).slice(0, 5),
+    spacing:        (j.spacing       ?? []).slice(0, 5),
+    colors:         (j.colors        ?? []).slice(0, 5),
+    inaccuracies:   (j.inaccuracies  ?? []).slice(0, 5),
+  };
 }
 
 function normalizeSeverity(s) {
