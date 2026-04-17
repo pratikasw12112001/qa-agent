@@ -57,17 +57,31 @@ export async function matchStatesToFrames({
   // ── Phase 2: Export PNGs only for candidate frames ──────────────────────────
   const framePngs = new Map();
   if (candidateIds.size > 0 && fileKey && figmaToken) {
-    try {
-      const nodeIds = [...candidateIds];
-      console.log(`   Exporting PNGs for ${nodeIds.length} candidate frame(s) (of ${frames.length} total)`);
-      const batch = await exportFramesPngBatch(fileKey, nodeIds, figmaToken, 1);
-      for (const [id, buf] of Object.entries(batch)) {
-        framePngs.set(id, buf.toString("base64"));
+    const nodeIds = [...candidateIds];
+    console.log(`   Exporting PNGs for ${nodeIds.length} candidate frame(s) (of ${frames.length} total)`);
+
+    // Try in batches of 10 to avoid Figma URL-length limits; retry once on failure
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < nodeIds.length; i += BATCH_SIZE) {
+      const chunk = nodeIds.slice(i, i + BATCH_SIZE);
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const batch = await exportFramesPngBatch(fileKey, chunk, figmaToken, 1);
+          for (const [id, buf] of Object.entries(batch)) {
+            if (buf) framePngs.set(id, Buffer.isBuffer(buf) ? buf.toString("base64") : buf);
+          }
+          break;  // success
+        } catch (e) {
+          if (attempt === 2)
+            console.warn(`   ⚠ PNG export failed for chunk ${i}-${i+chunk.length}: ${e.message.slice(0,80)}`);
+          else {
+            console.log(`   Retrying PNG export for chunk ${i}-${i+chunk.length}…`);
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        }
       }
-      console.log(`   Exported ${framePngs.size} frame PNG(s)`);
-    } catch (e) {
-      console.warn(`   ⚠ PNG export failed — using text+structure fallback: ${e.message.slice(0, 80)}`);
     }
+    console.log(`   Exported ${framePngs.size}/${nodeIds.length} frame PNG(s)`);
   }
 
   // ── Phase 3: Vision confirmation + result assembly ───────────────────────────
