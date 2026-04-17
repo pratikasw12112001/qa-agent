@@ -138,6 +138,7 @@ export function generateReport({
   <a href="#frames">Frames</a>
   ${hasIssues  ? `<a href="#issues">Issues</a>`  : ""}
   ${hasChecks  ? `<a href="#checks">Checks</a>`  : ""}
+  <a href="#logs">Logs</a>
   <a href="#debug">Debug</a>
 </nav>
 
@@ -218,7 +219,18 @@ ${hasChecks ? `
   <div class="sec-body">${renderChecks(functional)}</div>
 </section>` : ""}
 
-<!-- SECTION 4: DEBUG -->
+<!-- SECTION 4: LOGS -->
+<section id="logs" class="shut">
+  <div class="sec-hd">
+    <h2>Run Logs <span class="aud">QA / PM</span></h2>
+    <span class="tog">▾</span>
+  </div>
+  <div class="sec-body">
+    ${renderLogs({ states, matches, frames, findings, functional, prdAcs, coverageGaps, warnings, aiStats })}
+  </div>
+</section>
+
+<!-- SECTION 5: DEBUG -->
 <section id="debug" class="shut">
   <div class="sec-hd">
     <h2>Debug &amp; Metadata</h2>
@@ -524,6 +536,209 @@ function scoreExplanation(score, stateCount, matchedCount, unmatchedCount, frame
     parts.push(`Avg frame fidelity: ${avg}/100.`);
   }
   return parts.join(" ");
+}
+
+// ─── Run Logs ─────────────────────────────────────────────────────────────────
+
+function renderLogs({ states, matches, frames, findings, functional, prdAcs, coverageGaps, warnings, aiStats }) {
+  const rows = [];
+
+  const logRow = (icon, color, label, detail = "") => `
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:14px;flex-shrink:0;margin-top:1px">${icon}</span>
+      <div style="flex:1;min-width:0">
+        <span style="font-size:13px;font-weight:600;color:${color}">${escapeHtml(label)}</span>
+        ${detail ? `<span style="font-size:12px;color:var(--muted);margin-left:8px">${detail}</span>` : ""}
+      </div>
+    </div>`;
+
+  const group = (title) => `
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+                color:var(--muted);margin:18px 0 4px;padding-bottom:4px;border-bottom:1px solid var(--border)">
+      ${title}
+    </div>`;
+
+  // ── WHAT WAS TESTED ────────────────────────────────────────────────────────
+
+  rows.push(group("✓ What Was Tested"));
+
+  // States explored
+  rows.push(logRow("🔍", "#86efac",
+    `${states.length} screen state${states.length!==1?"s":""} explored`,
+    "BFS click-exploration from the source URL"
+  ));
+
+  // Per-state detail
+  const matchedSet = new Set(matches.filter(m => m.frameId).map(m => m.stateId));
+  for (const s of states) {
+    const m     = matches.find(x => x.stateId === s.id);
+    const icon  = m?.status === "matched" ? "✓" : m?.status === "review" ? "~" : "·";
+    const color = m?.status === "matched" ? "#86efac" : m?.status === "review" ? "#fde68a" : "#94a3b8";
+    const frame = m?.frameName ? ` → Figma: "${m.frameName}" (${(m.confidence*100).toFixed(0)}%)` : " → no Figma match";
+    const errs  = findings.filter(f => f.stateId === s.id && f.severity === "error").length;
+    const errTxt = errs ? ` · ${errs} error${errs>1?"s":""}` : "";
+    rows.push(`
+      <div style="display:flex;gap:10px;align-items:baseline;padding:4px 0 4px 24px;border-bottom:1px solid #111827">
+        <span style="font-size:11px;color:${color};flex-shrink:0;font-weight:700">${icon}</span>
+        <div style="min-width:0">
+          <span style="font-size:12px;font-weight:600">${escapeHtml(s.triggerDesc)}</span>
+          <span style="font-size:11px;color:var(--muted)">${escapeHtml(frame)}${errTxt}</span>
+        </div>
+      </div>`);
+  }
+
+  // Figma frames evaluated
+  const framesMatched = new Set(matches.filter(m => m.frameId && (m.status==="matched"||m.status==="review")).map(m => m.frameId));
+  if (frames.length) {
+    rows.push(logRow("🎨", "#86efac",
+      `${framesMatched.size} of ${frames.length} Figma frame${frames.length!==1?"s":""} matched`,
+      "Frames scoped to the provided Figma page"
+    ));
+  }
+
+  // Functional checks
+  if (functional?.testedUrls?.length) {
+    rows.push(logRow("🔗", "#86efac",
+      `${functional.testedUrls.length} URL${functional.testedUrls.length!==1?"s":""} checked for broken links, console errors, network failures`
+    ));
+  }
+
+  // A11y
+  const a11yUrls = functional?.a11y?.length ?? 0;
+  if (a11yUrls) {
+    rows.push(logRow("♿", "#86efac", `Accessibility scan run on ${a11yUrls} page${a11yUrls!==1?"s":""}`));
+  }
+
+  // PRD
+  if (prdAcs?.length) {
+    const pass = prdAcs.filter(a => a.status === "pass").length;
+    rows.push(logRow("📋", "#86efac",
+      `${prdAcs.length} PRD acceptance criteria checked`,
+      `${pass} passed · ${prdAcs.length - pass} failed/partial`
+    ));
+  }
+
+  // ── WHAT WAS NOT TESTED & WHY ──────────────────────────────────────────────
+
+  rows.push(group("⚠ What Was Not Tested & Why"));
+
+  let anythingSkipped = false;
+
+  // Figma frames with no live state match
+  const unmatchedFrames = frames.filter(f => !framesMatched.has(f.id));
+  if (unmatchedFrames.length) {
+    anythingSkipped = true;
+    rows.push(logRow("🎨", "#fde68a",
+      `${unmatchedFrames.length} Figma frame${unmatchedFrames.length!==1?"s":""} were never matched to a live state`,
+      "These designs were not verified against the live app"
+    ));
+    for (const f of unmatchedFrames) {
+      rows.push(`
+        <div style="display:flex;gap:10px;align-items:baseline;padding:3px 0 3px 24px;border-bottom:1px solid #111827">
+          <span style="font-size:11px;color:#fde68a;flex-shrink:0">·</span>
+          <span style="font-size:12px;color:var(--muted)">"${escapeHtml(f.name)}"
+            <span style="color:var(--dim)"> — no live state reached this screen</span>
+          </span>
+        </div>`);
+    }
+  }
+
+  // States that hit the cap (heuristic: if states.length is a round number like 40)
+  const MAX_STATES = 40;
+  if (states.length >= MAX_STATES) {
+    anythingSkipped = true;
+    rows.push(logRow("🔢", "#fde68a",
+      `Exploration stopped at ${states.length} states (cap reached)`,
+      "There may be more screens — increase maxStates or use a starting frame URL to focus exploration"
+    ));
+  }
+
+  // Unmatched live states
+  const unmatchedStates = matches.filter(m => m.status === "unmatched");
+  if (unmatchedStates.length) {
+    anythingSkipped = true;
+    rows.push(logRow("❓", "#fde68a",
+      `${unmatchedStates.length} captured state${unmatchedStates.length!==1?"s":""} had no Figma frame match`,
+      "These screens exist in the live app but have no counterpart in the scoped Figma canvas"
+    ));
+  }
+
+  // Figma not available
+  const figmaWarn = warnings.find(w => w.step === "Figma");
+  if (figmaWarn) {
+    anythingSkipped = true;
+    rows.push(logRow("🎨", "#fca5a5",
+      "Figma design comparison skipped",
+      figmaWarn.message.slice(0, 120)
+    ));
+  }
+
+  // Functional tests failed
+  const funcWarn = warnings.find(w => w.step === "Functional");
+  if (funcWarn) {
+    anythingSkipped = true;
+    rows.push(logRow("🔗", "#fca5a5",
+      "Functional tests did not complete",
+      funcWarn.message.slice(0, 120)
+    ));
+  }
+
+  // PRD not provided
+  if (!prdAcs?.length) {
+    anythingSkipped = true;
+    rows.push(logRow("📋", "#94a3b8",
+      "PRD acceptance criteria — not checked",
+      "No PRD PDF was uploaded. Upload one to enable criteria checking and coverage gap detection."
+    ));
+  }
+
+  // Coverage gaps from PRD
+  if (coverageGaps.missingScreens?.length) {
+    anythingSkipped = true;
+    rows.push(logRow("📭", "#fde68a",
+      `${coverageGaps.missingScreens.length} PRD-described screen${coverageGaps.missingScreens.length!==1?"s":""} never captured`,
+      coverageGaps.missingScreens.slice(0,3).map(s => `"${s}"`).join(", ") + (coverageGaps.missingScreens.length > 3 ? "…" : "")
+    ));
+  }
+
+  if (coverageGaps.untestedActions?.length) {
+    anythingSkipped = true;
+    rows.push(logRow("🔲", "#fde68a",
+      `${coverageGaps.untestedActions.length} PRD-described action${coverageGaps.untestedActions.length!==1?"s":""} never triggered`,
+      coverageGaps.untestedActions.slice(0,3).map(a => `"${a}"`).join(", ") + (coverageGaps.untestedActions.length > 3 ? "…" : "")
+    ));
+  }
+
+  // Other warnings
+  for (const w of warnings.filter(w => w.step !== "Figma" && w.step !== "Functional")) {
+    anythingSkipped = true;
+    rows.push(logRow("⚠", "#fca5a5", `${w.step} step had an error`, w.message.slice(0, 120)));
+  }
+
+  if (!anythingSkipped) {
+    rows.push(`<div style="font-size:13px;color:var(--green);padding:8px 0">✓ Full coverage — no gaps detected.</div>`);
+  }
+
+  // ── AI USAGE ───────────────────────────────────────────────────────────────
+
+  if (aiStats) {
+    rows.push(group("AI Usage"));
+    rows.push(`
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;padding:6px 0">
+        ${[
+          ["Text calls",   aiStats.textCalls   ?? 0],
+          ["Vision calls", aiStats.visionCalls  ?? 0],
+          ["Cache hits",   aiStats.cacheHits    ?? 0],
+          ["Est. cost",    "$" + (aiStats.cost ?? 0).toFixed(3)],
+        ].map(([k,v]) => `
+          <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+            <div style="font-size:11px;color:var(--muted)">${k}</div>
+            <div style="font-size:18px;font-weight:700">${v}</div>
+          </div>`).join("")}
+      </div>`);
+  }
+
+  return `<div style="line-height:1">${rows.join("")}</div>`;
 }
 
 function escapeHtml(s) {
