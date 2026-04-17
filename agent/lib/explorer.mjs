@@ -70,12 +70,12 @@ export async function exploreStates({
 
   const states      = [];
   const seenHashes  = new Set();
-  const clickedKeys = new Set();  // global dedup of (stateHash, elementText) pairs
+  const clickedKeys = new Set();  // global dedup of (stateKey, elementText) pairs
 
   // ── Capture root state ───────────────────────────────────────────────────
   const root = await captureState(page, {
     id: "s0", parent: null, triggerDesc: "initial load",
-    url: page.url(), depth: 0,
+    url: page.url(), depth: 0, baseUrl: page.url(), entryClicks: [],
   });
   states.push(root);
   seenHashes.add(root.hash);
@@ -91,8 +91,12 @@ export async function exploreStates({
     const parent = states.find((s) => s.id === stateId);
     if (!parent || BLOCKED_URL_RE.test(parent.url)) continue;
 
+    // Navigate to the nearest URL ancestor, then replay clicks to reach this state
+    const baseUrl     = parent.baseUrl || parent.url;
+    const entryClicks = parent.entryClicks || [];
+
     try {
-      await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(800);
 
@@ -100,18 +104,32 @@ export async function exploreStates({
       if (await detectLoginPage(page)) {
         console.log(`   → mid-run session expired, re-logging in`);
         await performLoginOnPage(page, email, password);
-        await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
         await page.waitForTimeout(1500);
       }
+
+      // Replay entry clicks to restore overlay/modal context
+      for (const ec of entryClicks) {
+        await page.addStyleTag({
+          content: `tr td button, tr td [role="button"], tr td .ant-btn, tr td .ant-space, tr td .ant-space-item
+            { opacity:1!important; visibility:visible!important; pointer-events:auto!important; }`,
+        }).catch(() => {});
+        await page.locator('[data-row-key], .ant-table-row').first().hover({ force: true }).catch(() => {});
+        await page.waitForTimeout(300);
+        const loc = page.locator(ec.selector).first();
+        if (await loc.count()) {
+          await loc.scrollIntoViewIfNeeded().catch(() => {});
+          await loc.click({ timeout: 4000 }).catch(() => {});
+          await page.waitForTimeout(waitAfterClickMs);
+        }
+      }
     } catch (e) {
-      console.warn(`   ⚠ failed to re-open ${parent.url}: ${e.message.slice(0, 60)}`);
+      console.warn(`   ⚠ failed to re-open state ${parent.id}: ${e.message.slice(0, 60)}`);
       continue;
     }
 
     // ── Reveal hover-only row action buttons ─────────────────────────────────
-    // Ant Design (and many other frameworks) hide per-row action buttons via CSS
-    // until the user hovers. Force them visible so the selector scan can find them.
     await page.addStyleTag({
       content: `
         .ant-table-row td .ant-btn, .ant-table-row td .ant-space .ant-btn,
@@ -121,18 +139,19 @@ export async function exploreStates({
         { opacity:1!important; visibility:visible!important; pointer-events:auto!important; }
       `,
     }).catch(() => {});
-    // Hover first table row so any JS-based hover reveals also fire
     await page.locator('[data-row-key], .ant-table-row').first().hover({ force: true }).catch(() => {});
     await page.waitForTimeout(300);
 
     const clickables = await collectClickables(page);
     console.log(`   → state ${parent.id}: ${clickables.length} clickable candidates`);
 
+    // Dedup key includes the entry-click path so overlay items are treated separately
+    const stateKey = `${baseUrl}::${entryClicks.map((e) => e.text).join(">>")}`;
+
     for (const el of clickables) {
       if (states.length >= maxStates) break;
 
-      // Global dedup: don't repeat (parent-url, element-text) combination
-      const globalKey = `${parent.url}::${el.text}`;
+      const globalKey = `${stateKey}::${el.text}`;
       if (clickedKeys.has(globalKey)) continue;
       clickedKeys.add(globalKey);
 
@@ -151,10 +170,13 @@ export async function exploreStates({
         const afterUrl  = page.url();
         const afterHash = await domHash(page);
 
-        // Bail if we landed on a blocked URL
         if (BLOCKED_URL_RE.test(afterUrl)) {
-          await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+          await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
           await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+          for (const ec of entryClicks) {
+            await page.locator(ec.selector).first().click({ timeout: 3000 }).catch(() => {});
+            await page.waitForTimeout(waitAfterClickMs);
+          }
           continue;
         }
 
@@ -164,29 +186,55 @@ export async function exploreStates({
 
         if (seenHashes.has(afterHash)) {
           if (urlChanged) {
-            await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+            await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
             await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+            for (const ec of entryClicks) {
+              await page.locator(ec.selector).first().click({ timeout: 3000 }).catch(() => {});
+              await page.waitForTimeout(waitAfterClickMs);
+            }
           } else {
             await dismissOverlay(page);
+            for (const ec of entryClicks) {
+              await page.locator(ec.selector).first().click({ timeout: 3000 }).catch(() => {});
+              await page.waitForTimeout(waitAfterClickMs);
+            }
           }
           continue;
         }
+
+        // For overlay states (URL unchanged), record the click sequence so we can replay
+        const newEntryClicks = urlChanged ? [] : [...entryClicks, el];
+        const newBaseUrl     = urlChanged ? afterUrl : baseUrl;
 
         const newState = await captureState(page, {
           id: `s${stateCounter++}`, parent: parent.id,
           triggerDesc: `click "${truncate(el.text, 40)}"`,
           url: afterUrl, depth: depth + 1,
+          baseUrl: newBaseUrl, entryClicks: newEntryClicks,
         });
         states.push(newState);
         seenHashes.add(newState.hash);
         queue.push({ stateId: newState.id, depth: depth + 1 });
-        console.log(`     + ${newState.id} via click "${truncate(el.text, 40)}" (${urlChanged ? "nav" : "overlay"})`);
+        console.log(`     + ${newState.id} via click "${truncate(el.text, 40)}" (${urlChanged ? "nav" : "overlay → will explore inside"})`);
 
         if (urlChanged) {
-          await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+          await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
           await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+          for (const ec of entryClicks) {
+            await page.locator(ec.selector).first().click({ timeout: 3000 }).catch(() => {});
+            await page.waitForTimeout(waitAfterClickMs);
+          }
         } else {
+          // Dismiss this overlay and replay parent entry to continue exploring siblings
           await dismissOverlay(page);
+          for (const ec of entryClicks) {
+            await page.addStyleTag({
+              content: `tr td button, tr td [role="button"], tr td .ant-btn
+                { opacity:1!important; visibility:visible!important; pointer-events:auto!important; }`,
+            }).catch(() => {});
+            await page.locator(ec.selector).first().click({ timeout: 3000 }).catch(() => {});
+            await page.waitForTimeout(waitAfterClickMs);
+          }
         }
       } catch {
         // swallow, try next
@@ -253,6 +301,17 @@ async function collectClickables(page) {
       // Generic table cell interactive elements
       'td button',
       'td [role="button"]',
+      // Overlay / dropdown / modal contents — explored when overlay is open
+      '.ant-dropdown-menu-item:not(.ant-dropdown-menu-item-disabled)',
+      '.ant-menu-item:not(.ant-menu-item-disabled)',
+      '.ant-select-item-option:not(.ant-select-item-option-disabled)',
+      '[role="menuitem"]:not([disabled])',
+      '[role="option"]:not([disabled])',
+      '.ant-modal-body button:not([disabled])',
+      '.ant-modal-footer button:not([disabled])',
+      '.ant-drawer-body button:not([disabled])',
+      '.ant-popover-inner button:not([disabled])',
+      '.ant-popover-inner [role="button"]:not([disabled])',
     ];
 
     const seen    = new Set();
@@ -316,6 +375,8 @@ async function captureState(page, meta) {
   return {
     id: meta.id, parent: meta.parent, triggerDesc: meta.triggerDesc,
     url: meta.url, depth: meta.depth,
+    baseUrl: meta.baseUrl || meta.url,
+    entryClicks: meta.entryClicks || [],
     screenshot: screenshot.toString("base64"),
     textContent: dom.texts,
     structure: dom.structure,
