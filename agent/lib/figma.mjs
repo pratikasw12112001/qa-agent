@@ -30,6 +30,8 @@ const GH_CACHE_TOKEN  = process.env.GH_CACHE_TOKEN || process.env.GH_TOKEN || ""
 
 function figmaHeaders(token) { return { "X-Figma-Token": token }; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+/** Normalise Figma node ID: URL format "123-456" → API format "123:456" */
+export function normalizeNodeId(id) { return String(id ?? "").replace(/-/, ":"); }
 
 export function extractFileKey(url) {
   const m = url.match(/figma\.com\/(?:design|file|proto)\/([a-zA-Z0-9]+)/);
@@ -136,7 +138,7 @@ export async function fetchFrames(figmaUrl, token) {
 
   // 1. Check gh-pages persistent cache first
   const ghCache = await readGhPagesCache(fileKey);
-  if (ghCache?.frames) return { fileKey, frames: ghCache.frames };
+  if (ghCache?.frames) return { fileKey, frames: ghCache.frames, flowStartingPoints: ghCache.flowStartingPoints ?? [] };
 
   // 2. Check local disk cache (CI: always miss; local dev: useful)
   if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
@@ -158,12 +160,26 @@ export async function fetchFrames(figmaUrl, token) {
   // Pages whose names suggest they are not screen designs (component libs, icons, etc.)
   const SKIP_PAGE_RE = /^(component|asset|icon|style|library|archive|draft|template|symbol|_)/i;
 
-  const candidateIds = [];
+  const candidateIds        = [];
+  const flowStartingPoints  = [];   // prototype flow entry frames
+
   for (const page of stage1Data.document.children ?? []) {
     if (SKIP_PAGE_RE.test(page.name.trim())) {
       console.log(`   Skipping non-design page: "${page.name}"`);
       continue;
     }
+
+    // Collect prototype flow starting points (designer-marked entry frames)
+    for (const fsp of page.flowStartingPoints ?? []) {
+      if (fsp.nodeId) {
+        flowStartingPoints.push({
+          nodeId:   normalizeNodeId(fsp.nodeId),
+          name:     fsp.name ?? "",
+          pageName: page.name,
+        });
+      }
+    }
+
     for (const node of page.children ?? []) {
       if (node.type !== "FRAME" || node.visible === false) continue;
       if (/^frame\s*\d+$/i.test(node.name.trim())) continue;
@@ -172,6 +188,9 @@ export async function fetchFrames(figmaUrl, token) {
       if (w < 400 || h < 300) continue;
       candidateIds.push({ id: node.id, name: node.name, page: page.name, w, h });
     }
+  }
+  if (flowStartingPoints.length) {
+    console.log(`   Prototype flow starting points: ${flowStartingPoints.map((f) => `"${f.name}"`).join(", ")}`);
   }
   console.log(`   Found ${candidateIds.length} candidate frames`);
 
@@ -211,10 +230,10 @@ export async function fetchFrames(figmaUrl, token) {
     });
   }
 
-  const result = { fileKey, frames };
+  const result = { fileKey, frames, flowStartingPoints };
   writeFileSync(localCache, JSON.stringify(result));
   await writeGhPagesCache(fileKey, result);
-  console.log(`   Extracted ${frames.length} frames`);
+  console.log(`   Extracted ${frames.length} frames · ${flowStartingPoints.length} prototype flow(s)`);
   return result;
 }
 

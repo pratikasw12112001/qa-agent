@@ -16,12 +16,21 @@ const GH_REPO  = process.env.GITHUB_REPO || "pratikasw12112001/qa-agent";
 export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
-    const figmaUrl = String(form.get("figmaUrl") || "").trim();
-    const liveUrl  = String(form.get("liveUrl")  || "").trim();
-    const prd      = form.get("prd") as File | null;
+    const figmaUrl      = String(form.get("figmaUrl")      || "").trim();
+    const liveUrl       = String(form.get("liveUrl")       || "").trim();
+    const startingFrame = String(form.get("startingFrame") || "").trim();
+    const prd           = form.get("prd") as File | null;
 
     if (!figmaUrl || !liveUrl) {
       return NextResponse.json({ error: "figmaUrl and liveUrl required" }, { status: 400 });
+    }
+
+    // Extract node-id from a Figma frame URL if provided
+    // URL format: ?node-id=123-456  →  API format: 123:456
+    let startingFrameId = "";
+    if (startingFrame) {
+      const m = startingFrame.match(/node-id=([0-9]+-[0-9]+)/);
+      startingFrameId = m ? m[1] : startingFrame; // pass raw if no URL pattern found
     }
     if (!GH_TOKEN) {
       return NextResponse.json({ error: "GH_TOKEN not configured on server" }, { status: 500 });
@@ -48,7 +57,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         event_type: "qa-run",
-        client_payload: { runId, figmaUrl, liveUrl, prdUrl },
+        client_payload: { runId, figmaUrl, liveUrl, prdUrl, startingFrameId },
       }),
     });
     if (!dispatchRes.ok) {

@@ -16,14 +16,16 @@ export default function HomePage() {
     setLoading(true);
 
     const form = e.currentTarget;
-    const figmaUrl = (form.elements.namedItem("figmaUrl") as HTMLInputElement).value.trim();
-    const liveUrl = (form.elements.namedItem("liveUrl") as HTMLInputElement).value.trim();
+    const figmaUrl      = (form.elements.namedItem("figmaUrl")      as HTMLInputElement).value.trim();
+    const liveUrl       = (form.elements.namedItem("liveUrl")       as HTMLInputElement).value.trim();
+    const startingFrame = (form.elements.namedItem("startingFrame") as HTMLInputElement).value.trim();
     const file = fileRef.current?.files?.[0];
 
     try {
       const fd = new FormData();
       fd.append("figmaUrl", figmaUrl);
       fd.append("liveUrl", liveUrl);
+      if (startingFrame) fd.append("startingFrame", startingFrame);
       if (file) fd.append("prd", file);
 
       const res = await fetch("/api/run", { method: "POST", body: fd });
@@ -61,6 +63,21 @@ export default function HomePage() {
             <label style={label}>Live App URL (source page)</label>
             <input name="liveUrl" required placeholder="https://your-app.com/dashboard" style={input} />
             <p style={hint}>The agent logs in and starts exploration from this URL</p>
+          </div>
+
+          <div>
+            <label style={label}>
+              Starting Frame <span style={{ color: "#94a3b8", fontWeight: 400 }}>(optional — overrides auto-detection)</span>
+            </label>
+            <input
+              name="startingFrame"
+              placeholder="https://www.figma.com/design/…?node-id=123-456"
+              style={input}
+            />
+            <p style={hint}>
+              Paste a Figma frame URL to anchor prototype flow matching.
+              Leave blank — the agent auto-detects entry frames from your prototype flows.
+            </p>
           </div>
 
           <div>
@@ -112,9 +129,9 @@ export default function HomePage() {
         <div style={{ marginTop: "32px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
           {[
             ["Smart exploration", "Clicks content buttons — not the sidebar"],
-            ["AI matching", "Visual + text + structure signals per state"],
-            ["Visual diff", "Finds layout, color, typography, missing elements"],
-            ["PRD checklist", "Maps acceptance criteria to live states"],
+            ["Prototype-guided matching", "Auto-detects Figma flow starting points"],
+            ["7-dimension analysis", "Layout, typography, colors, components and more"],
+            ["PRD coverage gaps", "Flags missing screens and untested actions"],
           ].map(([title, desc]) => (
             <div key={title} style={{ background: "#111827", border: "1px solid #1e2640", borderRadius: "10px", padding: "12px" }}>
               <div style={{ fontSize: "13px", fontWeight: 600, marginBottom: "2px" }}>{title}</div>

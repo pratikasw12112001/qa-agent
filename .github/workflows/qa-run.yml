@@ -86,8 +86,9 @@ jobs:
           RUN_ID:         ${{ github.event.client_payload.runId || github.event.inputs.runId || 'manual' }}
           SESSION_PATH:   ./sessions/session.json
           OUT_DIR:        ./reports
-          GH_CACHE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO:    pratikasw12112001/qa-agent
+          GH_CACHE_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:       pratikasw12112001/qa-agent
+          STARTING_FRAME_ID: ${{ github.event.client_payload.startingFrameId || '' }}
           CI: "true"
         run: node agent.mjs
 

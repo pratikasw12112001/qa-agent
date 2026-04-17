@@ -13,7 +13,9 @@
  */
 
 export function generateReport({
-  runId, meta, frames, states, matches, findings, frameAnalyses = [], functional, prdAcs, aiStats, warnings = [],
+  runId, meta, frames, states, matches, findings, frameAnalyses = [],
+  functional, prdAcs, coverageGaps = { missingScreens: [], untestedActions: [] },
+  aiStats, warnings = [],
 }) {
   const score = computeScore(findings, matches, functional);
   const now = new Date().toISOString();
@@ -212,11 +214,19 @@ export function generateReport({
     ${renderPrd(prdAcs)}
   </section>` : ""}
 
+  ${(coverageGaps.missingScreens.length || coverageGaps.untestedActions.length) ? `
+  <section>
+    <h2>Coverage Gaps <span class="aud">PM / QA</span></h2>
+    ${renderCoverageGaps(coverageGaps)}
+  </section>` : ""}
+
   <section>
     <h2>Run Metadata <span class="aud">Debug</span></h2>
     <table>
       <tr><th>Live URL</th><td>${escapeHtml(meta.liveUrl)}</td></tr>
       <tr><th>Figma file</th><td>${escapeHtml(meta.figmaFileKey)}</td></tr>
+      ${meta.startingFrameId ? `<tr><th>Starting frame (explicit)</th><td><code>${escapeHtml(meta.startingFrameId)}</code></td></tr>` : ""}
+      ${meta.flowStartingPoints?.length ? `<tr><th>Prototype flows detected</th><td>${meta.flowStartingPoints.map((f) => escapeHtml(f.name || f.nodeId)).join(", ")}</td></tr>` : ""}
       <tr><th>Generated</th><td>${escapeHtml(now)}</td></tr>
       <tr><th>AI calls (text)</th><td>${aiStats?.textCalls ?? 0}</td></tr>
       <tr><th>AI calls (vision)</th><td>${aiStats?.visionCalls ?? 0}</td></tr>
@@ -626,6 +636,56 @@ function renderCombinedAssessment(frameAnalyses) {
       </ul>
     </div>
     ${scoreTable}`;
+}
+
+// ─── coverage gaps ──────────────────────────────────────────────────────────
+
+function renderCoverageGaps({ missingScreens, untestedActions }) {
+  const blocks = [];
+
+  if (missingScreens?.length) {
+    blocks.push(`
+      <div style="margin-bottom:18px">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+                    color:var(--red);margin-bottom:10px">
+          Missing Screens — ${missingScreens.length}
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 10px 0">
+          These screens are described in the PRD but no matching state was captured during exploration.
+        </p>
+        ${missingScreens.map((s) => `
+          <div class="finding error" style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:18px;flex-shrink:0">📭</span>
+            <div>
+              <div class="desc">${escapeHtml(s)}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">Not captured — check if the screen is reachable from the source URL</div>
+            </div>
+          </div>`).join("")}
+      </div>`);
+  }
+
+  if (untestedActions?.length) {
+    blocks.push(`
+      <div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+                    color:var(--yellow);margin-bottom:10px">
+          Untested Interactions — ${untestedActions.length}
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 10px 0">
+          These user interactions are described in the PRD but were never triggered during exploration.
+        </p>
+        ${untestedActions.map((a) => `
+          <div class="finding warn" style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:18px;flex-shrink:0">🔲</span>
+            <div>
+              <div class="desc">${escapeHtml(a)}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">Not triggered — the explorer may not have found the relevant element</div>
+            </div>
+          </div>`).join("")}
+      </div>`);
+  }
+
+  return blocks.join("") || `<p style="color:var(--green)">All PRD-described screens and interactions were covered.</p>`;
 }
 
 function escapeHtml(s) {

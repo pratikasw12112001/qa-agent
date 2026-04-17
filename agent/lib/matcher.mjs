@@ -14,23 +14,36 @@ import { exportFramesPngBatch } from "./figma.mjs";
 
 export async function matchStatesToFrames({
   states, frames, fileKey, figmaToken, thresholds,
+  startingFrameId = null,    // explicit override: exact Figma node ID (API format 123:456)
+  flowStartingPoints = [],   // auto-detected from prototype flows
 }) {
   const W    = thresholds.matching;
   const topK = W.topCandidatesForVision ?? 5;
+
+  if (startingFrameId) {
+    console.log(`   Root anchor: explicit startingFrameId ${startingFrameId}`);
+  } else if (flowStartingPoints.length) {
+    console.log(`   Root anchor: ${flowStartingPoints.length} prototype flow(s) — ${flowStartingPoints.map((f) => `"${f.name}"`).join(", ")}`);
+  }
 
   // ── Phase 1: Text + structure + URL-name scoring for every (state, frame) pair ──
   const tier1Map      = new Map();   // stateId → sorted tier1 array
   const candidateIds  = new Set();   // frame IDs worth exporting
 
   for (const state of states) {
+    // Root bonus: for the root state (no parent), boost the designer-specified
+    // starting frame(s) so prototype traversal anchors correctly
+    const rootBonus = buildRootBonus(state, startingFrameId, flowStartingPoints);
+
     const tier1 = frames.map((f) => {
       const textScore   = textSimilarity(f.textContent, state.textContent);
       const structScore = structureSimilarity(f.structure, state.structure);
       const urlBonus    = urlNameBonus(state.url, f.name);
+      const rBonus      = rootBonus.get(f.id) ?? 0;
       const t1 = textScore   * (W.textWeight      / (W.textWeight + W.structureWeight))
                + structScore * (W.structureWeight  / (W.textWeight + W.structureWeight))
-               + urlBonus;
-      return { frame: f, textScore, structScore, urlBonus, t1 };
+               + urlBonus + rBonus;
+      return { frame: f, textScore, structScore, urlBonus, rootBonus: rBonus, t1 };
     }).sort((a, b) => b.t1 - a.t1);
 
     tier1Map.set(state.id, tier1);
@@ -158,6 +171,26 @@ export async function matchStatesToFrames({
   }
 
   return results;
+}
+
+// ─── root frame anchor bonus ────────────────────────────────────────────────
+/**
+ * For the root state only (no parent):
+ * - Explicit startingFrameId override → +1.0 (essentially forces the match)
+ * - Auto-detected flowStartingPoints  → +0.35 each (strong nudge toward entry frames)
+ */
+function buildRootBonus(state, startingFrameId, flowStartingPoints) {
+  const bonuses = new Map();
+  if (state.parent !== null) return bonuses;   // only applies to root state
+
+  if (startingFrameId) {
+    bonuses.set(startingFrameId, 1.0);
+    return bonuses;
+  }
+  for (const fsp of (flowStartingPoints ?? [])) {
+    if (fsp.nodeId) bonuses.set(fsp.nodeId, 0.35);
+  }
+  return bonuses;
 }
 
 // ─── prototype confidence boost ─────────────────────────────────────────────

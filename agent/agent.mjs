@@ -29,20 +29,26 @@ import { exploreStates }           from "./lib/explorer.mjs";
 import { matchStatesToFrames }     from "./lib/matcher.mjs";
 import { compareStateToFrame }     from "./lib/compare.mjs";
 import { runFunctionalTests }      from "./lib/functional.mjs";
-import { loadPrd, extractAcceptanceCriteria, checkAcceptanceCriteria } from "./lib/prd.mjs";
+import { loadPrd, extractAcceptanceCriteria, checkAcceptanceCriteria,
+         extractScreensAndActions, detectCoverageGaps } from "./lib/prd.mjs";
+import { normalizeNodeId } from "./lib/figma.mjs";
 import { generateReport }          from "./lib/report.mjs";
 import { getAiStats }              from "./lib/ai.mjs";
 
 const cfg = {
-  figmaToken:    process.env.FIGMA_TOKEN,
-  figmaFileUrl:  process.env.FIGMA_FILE_URL,
-  liveUrl:       process.env.LIVE_URL,
-  loginEmail:    process.env.LOGIN_EMAIL,
-  loginPassword: process.env.LOGIN_PASSWORD,
-  prdPdfPath:    process.env.PRD_PDF_PATH || null,
-  sessionPath:   resolve(process.env.SESSION_PATH ?? "./sessions/session.json"),
-  outDir:        resolve(process.env.OUT_DIR ?? "./reports"),
-  runId:         process.env.RUN_ID ?? Date.now().toString(),
+  figmaToken:      process.env.FIGMA_TOKEN,
+  figmaFileUrl:    process.env.FIGMA_FILE_URL,
+  liveUrl:         process.env.LIVE_URL,
+  loginEmail:      process.env.LOGIN_EMAIL,
+  loginPassword:   process.env.LOGIN_PASSWORD,
+  prdPdfPath:      process.env.PRD_PDF_PATH || null,
+  // Optional: explicit Figma node ID (API format 123:456 or URL format 123-456)
+  startingFrameId: process.env.STARTING_FRAME_ID
+    ? normalizeNodeId(process.env.STARTING_FRAME_ID)
+    : null,
+  sessionPath:     resolve(process.env.SESSION_PATH ?? "./sessions/session.json"),
+  outDir:          resolve(process.env.OUT_DIR ?? "./reports"),
+  runId:           process.env.RUN_ID ?? Date.now().toString(),
 };
 
 function validate() {
@@ -78,15 +84,17 @@ async function main() {
   const warnings = [];  // non-fatal issues collected for the report
 
   // ── 1. Figma frames (best-effort) ─────────────────────────────────────────
-  let fileKey = null;
-  let frames  = [];
+  let fileKey            = null;
+  let frames             = [];
+  let flowStartingPoints = [];
   if (cfg.figmaToken && cfg.figmaFileUrl) {
     console.log("▶  Fetching Figma frames");
     try {
       const result = await fetchFrames(cfg.figmaFileUrl, cfg.figmaToken);
-      fileKey = result.fileKey;
-      frames  = result.frames;
-      console.log(`   → ${frames.length} frame(s)`);
+      fileKey            = result.fileKey;
+      frames             = result.frames;
+      flowStartingPoints = result.flowStartingPoints ?? [];
+      console.log(`   → ${frames.length} frame(s) · ${flowStartingPoints.length} prototype flow(s)`);
       for (const f of frames) console.log(`     • [${f.page}] "${f.name}" ${Math.round(f.width)}×${Math.round(f.height)}`);
     } catch (e) {
       const msg = e.message || String(e);
@@ -114,6 +122,8 @@ async function main() {
     console.log("\n▶  Matching states to Figma frames");
     matches = await matchStatesToFrames({
       states, frames, fileKey, figmaToken: cfg.figmaToken, thresholds,
+      startingFrameId: cfg.startingFrameId,
+      flowStartingPoints,
     });
     const matched = matches.filter((m) => m.status === "matched").length;
     const review  = matches.filter((m) => m.status === "review").length;
@@ -164,18 +174,27 @@ async function main() {
     warnings.push({ step: "Functional", message: e.message });
   }
 
-  // ── 7. PRD AC checking ────────────────────────────────────────────────────
-  let prdAcs = [];
+  // ── 7. PRD analysis ───────────────────────────────────────────────────────
+  let prdAcs       = [];
+  let coverageGaps = { missingScreens: [], untestedActions: [] };
+
   if (cfg.prdPdfPath && existsSync(cfg.prdPdfPath)) {
     console.log("\n▶  PRD analysis");
     try {
       const prdText = await loadPrd(cfg.prdPdfPath);
       if (prdText) {
+        // Acceptance criteria
         const criteria = await extractAcceptanceCriteria(prdText);
-        console.log(`   → ${criteria?.length ?? 0} acceptance criteria extracted`);
+        console.log(`   → ${criteria?.length ?? 0} acceptance criteria`);
         prdAcs = await checkAcceptanceCriteria({ criteria, states, matches });
         const pass = prdAcs.filter((a) => a.status === "pass").length;
-        console.log(`   → ${pass}/${prdAcs.length} passed`);
+        console.log(`   → AC: ${pass}/${prdAcs.length} passed`);
+
+        // Coverage gaps: PRD-mentioned screens & actions vs what was captured
+        const { screens, actions } = await extractScreensAndActions(prdText);
+        console.log(`   → PRD expects ${screens.length} screen(s), ${actions.length} action(s)`);
+        coverageGaps = await detectCoverageGaps({ expectedScreens: screens, expectedActions: actions, states, matches });
+        console.log(`   → Coverage gaps: ${coverageGaps.missingScreens.length} missing screen(s), ${coverageGaps.untestedActions.length} untested action(s)`);
       } else {
         console.log("   → PDF could not be parsed, skipping");
       }
@@ -191,8 +210,14 @@ async function main() {
   console.log("\n▶  Generating report");
   const html = generateReport({
     runId: cfg.runId,
-    meta: { liveUrl: cfg.liveUrl, figmaFileKey: fileKey },
+    meta: {
+      liveUrl:        cfg.liveUrl,
+      figmaFileKey:   fileKey,
+      startingFrameId: cfg.startingFrameId,
+      flowStartingPoints,
+    },
     frames, states, matches, findings, frameAnalyses, functional, prdAcs,
+    coverageGaps,
     warnings,
     aiStats: getAiStats(),
   });
