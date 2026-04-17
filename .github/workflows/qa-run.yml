@@ -46,13 +46,16 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git fetch origin gh-pages
-          git checkout gh-pages
-          mkdir -p progress
-          echo "{\"status\":\"running\",\"queuedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > progress/${RUN_ID}.json
-          git add progress/${RUN_ID}.json
-          git commit -m "progress: ${RUN_ID} running" || true
-          git push origin gh-pages
+          for attempt in 1 2 3; do
+            git fetch origin gh-pages
+            git checkout gh-pages
+            git reset --hard origin/gh-pages
+            mkdir -p progress
+            echo "{\"status\":\"running\",\"queuedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > progress/${RUN_ID}.json
+            git add progress/${RUN_ID}.json
+            git commit -m "progress: ${RUN_ID} running" || true
+            git push origin gh-pages && break || echo "Push attempt $attempt failed, retrying in ${attempt}s..." && sleep $attempt
+          done
           git checkout main
 
       - name: Download PRD PDF (if provided)
@@ -93,29 +96,38 @@ jobs:
         env:
           RUN_ID: ${{ github.event.client_payload.runId || github.event.inputs.runId || 'manual' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PAGES_BASE: ${{ vars.GH_PAGES_BASE || 'https://pratikasw12112001.github.io/qa-agent' }}
         run: |
           REPORT_SRC="$GITHUB_WORKSPACE/agent/reports/report.html"
 
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git fetch origin gh-pages
-          git checkout gh-pages
-
-          mkdir -p reports progress
 
           if [ -f "$REPORT_SRC" ]; then
-            cp "$REPORT_SRC" reports/${RUN_ID}.html
             STATUS="done"
           else
             STATUS="error"
           fi
 
-          echo "{\"status\":\"${STATUS}\",\"completedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"reportUrl\":\"https://pratikasw12112001.github.io/qa-agent/reports/${RUN_ID}.html\"}" > progress/${RUN_ID}.json
+          # Retry loop: always reset to latest remote before writing to avoid non-fast-forward
+          for attempt in 1 2 3 4 5; do
+            git fetch origin gh-pages
+            git checkout gh-pages
+            git reset --hard origin/gh-pages
 
-          git add reports/${RUN_ID}.html 2>/dev/null || true
-          git add progress/${RUN_ID}.json
-          git commit -m "report: ${RUN_ID} ${STATUS}" || true
-          git push origin gh-pages
+            mkdir -p reports progress
+
+            if [ "$STATUS" = "done" ]; then
+              cp "$REPORT_SRC" reports/${RUN_ID}.html
+            fi
+
+            echo "{\"status\":\"${STATUS}\",\"completedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"reportUrl\":\"${GH_PAGES_BASE}/reports/${RUN_ID}.html\"}" > progress/${RUN_ID}.json
+
+            git add reports/${RUN_ID}.html 2>/dev/null || true
+            git add progress/${RUN_ID}.json
+            git commit -m "report: ${RUN_ID} ${STATUS}" || true
+            git push origin gh-pages && break || echo "Push attempt $attempt failed, retrying in ${attempt}s..." && sleep $attempt
+          done
           git checkout main
 
       - name: Upload artifact backup

@@ -58,13 +58,25 @@ export async function matchStatesToFrames({
   }
 
   // ── Phase 3: Vision confirmation + result assembly ───────────────────────────
-  const results = [];
+  // Process states in BFS order so parent matches are available for prototype boost
+  const results    = [];
+  const matchedMap = new Map();   // stateId → { frameId } — filled as we go
 
   for (const state of states) {
     const tier1 = tier1Map.get(state.id) ?? [];
-    const best  = tier1[0];
 
-    // Hard no-match: nothing above the very low floor
+    // Apply prototype confidence boost before picking winner
+    // If parent state is matched → look up its frame's prototype connections
+    // → any frame reachable via the trigger gets a +0.25 score bonus
+    const protoBonuses = buildProtoBonuses(state, states, matchedMap, frames);
+    const boostedTier1 = tier1.map((c) => {
+      const bonus = protoBonuses.get(c.frame.id) ?? 0;
+      return { ...c, t1: c.t1 + bonus, protoBonus: bonus };
+    }).sort((a, b) => b.t1 - a.t1);
+
+    const best = boostedTier1[0];
+
+    // Hard no-match: nothing above the very low floor (prototype bonus can push past this)
     if (!best || best.t1 < 0.05) {
       results.push({
         stateId: state.id, frameId: null, frameName: null,
@@ -75,25 +87,28 @@ export async function matchStatesToFrames({
       continue;
     }
 
-    // Candidates that have PNGs available for vision check
-    const candidates = tier1.slice(0, topK).filter((c) => framePngs.has(c.frame.id));
+    // Candidates that have PNGs available for vision check (from boosted list)
+    const candidates = boostedTier1.slice(0, topK).filter((c) => framePngs.has(c.frame.id));
 
-    // ── No PNGs available → text+structure fallback ─────────────────────────
+    // ── No PNGs available → text+structure+proto fallback ───────────────────
     if (candidates.length === 0) {
-      const conf = Math.min(best.t1, W.reviewScore - 0.01);  // cap just below "matched"
-      results.push({
-        stateId:    state.id,
-        frameId:    best.frame.id,
-        frameName:  best.frame.name,
-        framePage:  best.frame.page,
-        framePng:   null,
-        confidence: conf,
-        textScore:  best.textScore,
+      const conf = Math.min(best.t1, W.reviewScore - 0.01);
+      const result = {
+        stateId:     state.id,
+        frameId:     best.frame.id,
+        frameName:   best.frame.name,
+        framePage:   best.frame.page,
+        framePng:    null,
+        confidence:  conf,
+        textScore:   best.textScore,
         structScore: best.structScore,
         visualScore: 0,
-        reasoning: `Text+structure match (score ${conf.toFixed(2)}) — no PNG for visual check`,
+        protoBonus:  best.protoBonus ?? 0,
+        reasoning:   `Text+structure${best.protoBonus ? "+prototype" : ""} match — no PNG for visual check`,
         status: "review",
-      });
+      };
+      results.push(result);
+      matchedMap.set(state.id, result);
       continue;
     }
 
@@ -111,11 +126,10 @@ export async function matchStatesToFrames({
       }
     }
 
-    // Vision returned nothing useful → fall back to text best
     if (!winner) {
       winner       = best;
       winnerVisual = 0;
-      winnerReason = "Vision returned no score — using text match";
+      winnerReason = "Vision returned no score — using text/prototype match";
     }
 
     const confidence =
@@ -123,7 +137,7 @@ export async function matchStatesToFrames({
       winner.textScore * W.textWeight +
       winner.structScore * W.structureWeight;
 
-    results.push({
+    const result = {
       stateId:     state.id,
       frameId:     winner.frame.id,
       frameName:   winner.frame.name,
@@ -133,14 +147,73 @@ export async function matchStatesToFrames({
       textScore:   winner.textScore,
       structScore: winner.structScore,
       visualScore: winnerVisual,
+      protoBonus:  winner.protoBonus ?? 0,
       reasoning:   winnerReason,
       status: confidence >= W.autoAssignScore ? "matched"
             : confidence >= W.reviewScore     ? "review"
             : "unmatched",
-    });
+    };
+    results.push(result);
+    matchedMap.set(state.id, result);
   }
 
   return results;
+}
+
+// ─── prototype confidence boost ─────────────────────────────────────────────
+/**
+ * For states that were reached from a parent state:
+ * If the parent's matched Figma frame has prototype connections (reactions),
+ * find frames reachable via those connections whose element name overlaps
+ * with the live trigger description. Boost those frames' scores by +0.25.
+ *
+ * This is a "confidence booster" — it supplements text+vision, not replaces them.
+ */
+function buildProtoBonuses(state, states, matchedMap, frames) {
+  const bonuses = new Map();
+  if (!state.parent) return bonuses;
+
+  const parentResult = matchedMap.get(state.parent);
+  if (!parentResult?.frameId) return bonuses;
+
+  const parentFrame = frames.find((f) => f.id === parentResult.frameId);
+  if (!parentFrame?.interactions?.length) return bonuses;
+
+  // Normalise the live trigger description for fuzzy comparison
+  // e.g. 'click "Create new Logbook"' → 'create new logbook'
+  const triggerNorm = (state.triggerDesc || "")
+    .toLowerCase()
+    .replace(/^click\s+"?/, "")
+    .replace(/"$/, "")
+    .trim();
+
+  if (!triggerNorm) return bonuses;
+
+  for (const interaction of parentFrame.interactions) {
+    const elementNorm = (interaction.fromNodeName || "").toLowerCase().trim();
+    if (!elementNorm) continue;
+
+    // Fuzzy overlap: trigger contains element name OR element name contains trigger
+    const overlap =
+      triggerNorm.includes(elementNorm) ||
+      elementNorm.includes(triggerNorm) ||
+      tokenOverlap(triggerNorm, elementNorm) >= 0.5;
+
+    if (overlap) {
+      bonuses.set(interaction.toFrameId, 0.25);
+      console.log(`   → prototype bonus: "${state.triggerDesc}" → frame ${interaction.toFrameId} (+0.25)`);
+    }
+  }
+  return bonuses;
+}
+
+function tokenOverlap(a, b) {
+  const ta = new Set(a.split(/\s+/).filter((w) => w.length > 2));
+  const tb = new Set(b.split(/\s+/).filter((w) => w.length > 2));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let hits = 0;
+  for (const w of ta) if (tb.has(w)) hits++;
+  return hits / Math.min(ta.size, tb.size);
 }
 
 // ─── signal functions ───────────────────────────────────────────────────────

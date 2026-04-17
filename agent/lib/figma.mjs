@@ -155,8 +155,15 @@ export async function fetchFrames(figmaUrl, token) {
   const stage1Data = await stage1.json();
   await sleep(INTER_CALL_MS);
 
+  // Pages whose names suggest they are not screen designs (component libs, icons, etc.)
+  const SKIP_PAGE_RE = /^(component|asset|icon|style|library|archive|draft|template|symbol|_)/i;
+
   const candidateIds = [];
   for (const page of stage1Data.document.children ?? []) {
+    if (SKIP_PAGE_RE.test(page.name.trim())) {
+      console.log(`   Skipping non-design page: "${page.name}"`);
+      continue;
+    }
     for (const node of page.children ?? []) {
       if (node.type !== "FRAME" || node.visible === false) continue;
       if (/^frame\s*\d+$/i.test(node.name.trim())) continue;
