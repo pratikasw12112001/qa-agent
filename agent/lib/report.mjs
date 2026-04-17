@@ -96,21 +96,45 @@ export function generateReport({
   pre { background: #0e1626; border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 11px; }
   footer { color: var(--dim); font-size: 12px; text-align: center; padding: 14px; }
 
-  /* Frame deep-analysis styles */
-  .fa-frame { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; margin-bottom: 24px; overflow: hidden; }
-  .fa-header { background: var(--panel); padding: 18px 22px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
-  .fa-header h3 { margin: 0; font-size: 16px; }
-  .fa-header .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
-  .score-ring { width: 72px; height: 72px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; font-size: 22px; flex-shrink: 0; border: 4px solid; }
-  .score-ring .ring-label { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; margin-top: 1px; }
-  .fa-screenshots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 22px; border-bottom: 1px solid var(--border); }
-  .fa-cat { padding: 14px 22px; border-bottom: 1px solid var(--border); }
-  .fa-cat:last-child { border-bottom: none; }
-  .fa-cat-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
-  .fa-cat-title .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
-  .fa-row { display: grid; gap: 8px; grid-template-columns: 1fr 2fr; font-size: 13px; padding: 6px 0; border-bottom: 1px solid #1a2235; }
-  .fa-row:last-child { border-bottom: none; }
-  .fa-key { color: var(--muted); font-size: 12px; }
+  /* Sticky nav */
+  #qa-nav { position: sticky; top: 0; z-index: 100; background: rgba(11,15,26,.95); backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border); display: flex; gap: 4px; padding: 8px 24px; overflow-x: auto; }
+  #qa-nav a { color: var(--muted); font-size: 12px; font-weight: 600; text-decoration: none; padding: 5px 12px;
+              border-radius: 6px; white-space: nowrap; transition: all .15s; }
+  #qa-nav a:hover, #qa-nav a.active { background: var(--panel); color: var(--text); }
+
+  /* Collapsible sections */
+  .sec-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
+  .sec-header:hover { opacity: .85; }
+  .sec-toggle { font-size: 18px; color: var(--muted); transition: transform .2s; }
+  .sec-body { }
+  section.collapsed .sec-body { display: none; }
+  section.collapsed .sec-toggle { transform: rotate(-90deg); }
+
+  /* Frame card (collapsed by default) */
+  .fc { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
+  .fc-header { padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+               cursor: pointer; user-select: none; }
+  .fc-header:hover { background: #1a2540; }
+  .fc .fc-body { display: none; border-top: 1px solid var(--border); }
+  .fc.open .fc-body { display: block; }
+  .fc-chevron { color: var(--muted); font-size: 16px; transition: transform .2s; flex-shrink: 0; }
+  .fc.open .fc-chevron { transform: rotate(90deg); }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 2px; padding: 12px 18px 0; background: var(--panel); border-bottom: 1px solid var(--border); }
+  .tab-btn { padding: 7px 16px; font-size: 12px; font-weight: 600; border: none; background: none;
+             color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .tab-pane { display: none; padding: 16px 18px; }
+  .tab-pane.active { display: block; }
+
+  /* Score ring */
+  .score-ring { width: 60px; height: 60px; border-radius: 50%; display: flex; flex-direction: column; align-items: center;
+                justify-content: center; font-weight: 800; font-size: 18px; flex-shrink: 0; border: 3px solid; }
+  .score-ring .ring-label { font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; margin-top: 1px; }
+
+  /* Status badges */
   .status-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
   .status-matches { background: rgba(34,197,94,.15); color: #86efac; }
   .status-partial  { background: rgba(234,179,8,.15); color: #fde68a; }
@@ -118,9 +142,6 @@ export function generateReport({
   .status-present  { background: rgba(34,197,94,.15); color: #86efac; }
   .status-missing  { background: rgba(239,68,68,.15); color: #fca5a5; }
   .status-wrong    { background: rgba(234,179,8,.15); color: #fde68a; }
-  .sev-ok    { color: #86efac; }
-  .sev-warn  { color: #fde68a; }
-  .sev-error { color: #fca5a5; }
 
   /* Combined assessment */
   .combined { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: start; }
@@ -133,11 +154,24 @@ export function generateReport({
   .insight-list li::before { content: "→ "; color: var(--blue); font-weight: 700; }
 
   /* 7-dimension card grid */
-  .fa-dim-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-  .fa-dim-card { background: #0e1626; border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .fa-dim-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  .fa-dim-card { background: #0e1626; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
 </style>
 </head>
 <body>
+
+<nav id="qa-nav">
+  <a href="#summary">Summary</a>
+  <a href="#states">State Map</a>
+  <a href="#frames">Frame Analysis</a>
+  ${frameAnalyses.length ? `<a href="#combined">Combined Score</a>` : ""}
+  <a href="#functional">Functional</a>
+  <a href="#a11y">Accessibility</a>
+  ${prdAcs?.length ? `<a href="#prd">PRD</a>` : ""}
+  ${(coverageGaps.missingScreens.length || coverageGaps.untestedActions.length) ? `<a href="#coverage">Coverage</a>` : ""}
+  <a href="#meta">Meta</a>
+</nav>
+
 <div class="wrap">
 
   ${warnings.length ? `
@@ -166,82 +200,124 @@ export function generateReport({
     </div>
   </div>
 
-  <section>
-    <h2>Executive Summary <span class="aud">PM / Lead</span></h2>
-    <div class="grid-2">
-      <div class="card"><div class="k">Figma frames</div><div class="v">${frames.length}</div></div>
-      <div class="card"><div class="k">Live states discovered</div><div class="v">${states.length}</div></div>
-      <div class="card"><div class="k">Matched (high confidence)</div><div class="v">${matches.filter(m => m.status === "matched").length}</div></div>
-      <div class="card"><div class="k">Issues found</div><div class="v">${score.errors + score.warns}</div></div>
+  <section id="summary">
+    <h2 class="sec-header">Executive Summary <span class="aud">PM / Lead</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      <div class="grid-2">
+        <div class="card"><div class="k">Figma frames</div><div class="v">${frames.length}</div></div>
+        <div class="card"><div class="k">Live states discovered</div><div class="v">${states.length}</div></div>
+        <div class="card"><div class="k">Matched (high confidence)</div><div class="v">${matches.filter(m => m.status === "matched").length}</div></div>
+        <div class="card"><div class="k">Issues found</div><div class="v">${score.errors + score.warns}</div></div>
+      </div>
+      ${renderTopIssues(findings)}
     </div>
-    ${renderTopIssues(findings)}
   </section>
 
-  <section>
-    <h2>State Graph <span class="aud">QA / Designer</span></h2>
-    ${renderStateGraph(states, matches)}
+  <section id="states" class="collapsed">
+    <h2 class="sec-header">State Map <span class="aud">QA / Designer</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      ${renderStateGraph(states, matches)}
+    </div>
   </section>
 
-  <section>
-    <h2>Visual &amp; Content Findings <span class="aud">Designer / QA</span></h2>
-    ${renderStateFindings(states, matches, findings, frames)}
+  <section id="frames">
+    <h2 class="sec-header">Frame Analysis <span class="aud">Designer / QA</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      ${renderFrameCards(states, matches, findings, frames, frameAnalyses)}
+    </div>
   </section>
 
   ${frameAnalyses.length ? `
-  <section>
-    <h2>Frame-by-Frame Deep Analysis <span class="aud">Designer / QA</span></h2>
-    ${renderFrameAnalyses(frameAnalyses)}
-  </section>
-
-  <section>
-    <h2>Combined Assessment <span class="aud">PM / Lead</span></h2>
-    ${renderCombinedAssessment(frameAnalyses)}
+  <section id="combined" class="collapsed">
+    <h2 class="sec-header">Combined Assessment <span class="aud">PM / Lead</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      ${renderCombinedAssessment(frameAnalyses)}
+    </div>
   </section>` : ""}
 
-  <section>
-    <h2>Functional Tests <span class="aud">QA</span></h2>
-    ${renderFunctional(functional)}
+  <section id="functional" class="collapsed">
+    <h2 class="sec-header">Functional Tests <span class="aud">QA</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      ${renderFunctional(functional)}
+    </div>
   </section>
 
-  <section>
-    <h2>Accessibility <span class="aud">QA / Designer</span></h2>
-    ${renderA11y(functional)}
+  <section id="a11y" class="collapsed">
+    <h2 class="sec-header">Accessibility <span class="aud">QA / Designer</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      ${renderA11y(functional)}
+    </div>
   </section>
 
   ${prdAcs && prdAcs.length ? `
-  <section>
-    <h2>PRD · Acceptance Criteria <span class="aud">PM</span></h2>
-    ${renderPrd(prdAcs)}
+  <section id="prd" class="collapsed">
+    <h2 class="sec-header">PRD · Acceptance Criteria <span class="aud">PM</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      ${renderPrd(prdAcs)}
+    </div>
   </section>` : ""}
 
   ${(coverageGaps.missingScreens.length || coverageGaps.untestedActions.length) ? `
-  <section>
-    <h2>Coverage Gaps <span class="aud">PM / QA</span></h2>
-    ${renderCoverageGaps(coverageGaps)}
+  <section id="coverage" class="collapsed">
+    <h2 class="sec-header">Coverage Gaps <span class="aud">PM / QA</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      ${renderCoverageGaps(coverageGaps)}
+    </div>
   </section>` : ""}
 
-  <section>
-    <h2>Run Metadata <span class="aud">Debug</span></h2>
-    <table>
-      <tr><th>Live URL</th><td>${escapeHtml(meta.liveUrl)}</td></tr>
-      <tr><th>Figma file</th><td>${escapeHtml(meta.figmaFileKey)}</td></tr>
-      ${meta.startingFrameId ? `<tr><th>Starting frame (explicit)</th><td><code>${escapeHtml(meta.startingFrameId)}</code></td></tr>` : ""}
-      ${meta.flowStartingPoints?.length ? `<tr><th>Prototype flows detected</th><td>${meta.flowStartingPoints.map((f) => escapeHtml(f.name || f.nodeId)).join(", ")}</td></tr>` : ""}
-      <tr><th>Generated</th><td>${escapeHtml(now)}</td></tr>
-      <tr><th>AI calls (text)</th><td>${aiStats?.textCalls ?? 0}</td></tr>
-      <tr><th>AI calls (vision)</th><td>${aiStats?.visionCalls ?? 0}</td></tr>
-      <tr><th>AI cache hits</th><td>${aiStats?.cacheHits ?? 0}</td></tr>
-      <tr><th>Estimated cost</th><td>$${(aiStats?.cost ?? 0).toFixed(3)}</td></tr>
-    </table>
+  <section id="meta" class="collapsed">
+    <h2 class="sec-header">Run Metadata <span class="aud">Debug</span><span class="sec-toggle">▾</span></h2>
+    <div class="sec-body">
+      <table>
+        <tr><th>Live URL</th><td>${escapeHtml(meta.liveUrl)}</td></tr>
+        <tr><th>Figma file</th><td>${escapeHtml(meta.figmaFileKey)}</td></tr>
+        ${meta.startingFrameId ? `<tr><th>Starting frame (explicit)</th><td><code>${escapeHtml(meta.startingFrameId)}</code></td></tr>` : ""}
+        ${meta.flowStartingPoints?.length ? `<tr><th>Prototype flows detected</th><td>${meta.flowStartingPoints.map((f) => escapeHtml(f.name || f.nodeId)).join(", ")}</td></tr>` : ""}
+        <tr><th>Generated</th><td>${escapeHtml(now)}</td></tr>
+        <tr><th>AI calls (text)</th><td>${aiStats?.textCalls ?? 0}</td></tr>
+        <tr><th>AI calls (vision)</th><td>${aiStats?.visionCalls ?? 0}</td></tr>
+        <tr><th>AI cache hits</th><td>${aiStats?.cacheHits ?? 0}</td></tr>
+        <tr><th>Estimated cost</th><td>$${(aiStats?.cost ?? 0).toFixed(3)}</td></tr>
+      </table>
+    </div>
   </section>
 
 </div>
 <footer>QA Agent · Generated ${escapeHtml(now)}</footer>
 
 <script>
-  document.querySelectorAll(".state-header").forEach((h) => {
-    h.addEventListener("click", () => h.parentElement.classList.toggle("open"));
+  // Section collapse
+  document.querySelectorAll(".sec-header").forEach((h) => {
+    h.addEventListener("click", () => h.closest("section").classList.toggle("collapsed"));
   });
+
+  // Frame card accordion
+  document.querySelectorAll(".fc-header").forEach((h) => {
+    h.addEventListener("click", () => h.closest(".fc").classList.toggle("open"));
+  });
+
+  // Tab switching
+  document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const card = btn.closest(".fc-body");
+      card.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+      card.querySelectorAll(".tab-pane").forEach((p) => p.classList.remove("active"));
+      btn.classList.add("active");
+      card.querySelector("[data-tab='" + btn.dataset.tab + "']").classList.add("active");
+    });
+  });
+
+  // Sticky nav highlight
+  const sections = document.querySelectorAll("section[id]");
+  const navLinks = document.querySelectorAll("#qa-nav a");
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (e.isIntersecting) {
+        navLinks.forEach((a) => a.classList.toggle("active", a.getAttribute("href") === "#" + e.target.id));
+      }
+    });
+  }, { rootMargin: "-40% 0px -55% 0px" });
+  sections.forEach((s) => obs.observe(s));
 </script>
 </body></html>`;
 }
@@ -293,20 +369,30 @@ function renderStateGraph(states, matches) {
   return `<table><thead><tr><th>ID</th><th>Trigger</th><th>URL</th><th>Status</th><th>Figma frame</th><th>Confidence</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function renderStateFindings(states, matches, allFindings, frames) {
-  if (states.length === 0) return `<p style="color:var(--muted)">No data.</p>`;
+// ── Unified frame cards (replaces renderStateFindings + renderFrameAnalyses) ──
+function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
+  if (states.length === 0) return `<p style="color:var(--muted)">No states captured.</p>`;
   return states.map((s) => {
     const m        = matches.find((x) => x.stateId === s.id);
     const frame    = m?.frameId ? frames.find((f) => f.id === m.frameId) : null;
     const findings = allFindings.filter((f) => f.stateId === s.id);
     const errs     = findings.filter((f) => f.severity === "error").length;
     const warns    = findings.filter((f) => f.severity === "warn").length;
+    const fa       = frameAnalyses.find((x) => x.stateId === s.id);
+    const score    = fa?.frameScore ?? null;
+    const rc       = score === null ? "#64748b" : score >= 75 ? "#22c55e" : score >= 50 ? "#eab308" : "#ef4444";
 
-    // ── Screenshots always visible (not behind toggle) ────────────────────
+    // Score ring (only if we have analysis)
+    const ring = score !== null ? `
+      <div class="score-ring" style="border-color:${rc};color:${rc}">
+        ${score}<span class="ring-label" style="color:var(--muted)">/100</span>
+      </div>` : "";
+
+    // TAB 1 — Screenshots
     const liveImg = s.screenshot ? `
       <div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
-          LIVE SCREENSHOT · <span style="text-transform:none;font-weight:400">${escapeHtml(s.url)}</span>
+          LIVE · <span style="text-transform:none;font-weight:400">${escapeHtml(s.url)}</span>
         </div>
         <img src="data:image/png;base64,${s.screenshot}" alt="live screenshot"
           style="width:100%;border:2px solid #3b82f6;border-radius:8px;display:block">
@@ -315,28 +401,27 @@ function renderStateFindings(states, matches, allFindings, frames) {
     const figmaImg = m?.framePng ? `
       <div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
-          FIGMA DESIGN · <span style="text-transform:none;font-weight:400">${escapeHtml(frame?.name ?? "—")} (${(m.confidence*100).toFixed(0)}% match)</span>
+          FIGMA · <span style="text-transform:none;font-weight:400">${escapeHtml(frame?.name ?? "—")} (${(m.confidence*100).toFixed(0)}% match)</span>
         </div>
         <img src="data:image/png;base64,${m.framePng}" alt="figma frame"
           style="width:100%;border:2px solid #22c55e;border-radius:8px;display:block;background:#fff">
       </div>` : `
-      <div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
-          FIGMA DESIGN · <span style="text-transform:none;font-weight:400">no matching frame found</span>
-        </div>
-        <div style="width:100%;height:200px;border:2px dashed var(--border);border-radius:8px;
-          display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px">
-          No Figma frame matched this state
-        </div>
+      <div style="display:flex;align-items:center;justify-content:center;
+                  border:2px dashed var(--border);border-radius:8px;color:var(--dim);font-size:13px;height:160px">
+        No Figma frame matched
       </div>`;
 
-    const screenshotRow = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    const tabScreenshots = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         ${liveImg}${figmaImg}
       </div>`;
 
-    // ── Findings list ──────────────────────────────────────────────────────
-    const findingsList = findings.length ? findings.map((f) => `
+    // TAB 2 — Dimensions (from frame analysis)
+    const tabDimensions = fa ? renderDimGrid(fa) :
+      `<p style="color:var(--muted);font-size:13px">No dimension analysis — frame was not matched or vision was skipped.</p>`;
+
+    // TAB 3 — Issues
+    const tabIssues = findings.length ? findings.map((f) => `
       <div class="finding ${f.severity}">
         <div class="head">
           <span>${escapeHtml((f.category || "general").toUpperCase())}</span>
@@ -344,33 +429,41 @@ function renderStateFindings(states, matches, allFindings, frames) {
         </div>
         <div class="desc">${escapeHtml(f.description)}</div>
         ${f.evidence ? `<div style="color:var(--muted);font-size:11px;margin-top:4px">${escapeHtml(String(f.evidence))}</div>` : ""}
-      </div>`).join("") : `<p style="color:var(--muted);font-size:13px;margin:0">No visual/content issues detected for this state.</p>`;
+      </div>`).join("") :
+      `<p style="color:var(--muted);font-size:13px;margin:0">No visual/content issues detected.</p>`;
+
+    const summary = fa?.summary ? `<div style="font-size:12px;color:#94a3b8;font-style:italic;margin-top:3px">"${escapeHtml(fa.summary)}"</div>` : "";
 
     return `
-    <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:12px;margin-bottom:20px;overflow:hidden">
-      <!-- State header — always visible -->
-      <div style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;
-                  border-bottom:1px solid var(--border);background:var(--panel)">
-        <div>
-          <div style="font-weight:700;font-size:15px">${escapeHtml(s.id)} — ${escapeHtml(s.triggerDesc)}</div>
-          <div style="color:var(--muted);font-size:12px;margin-top:3px">${escapeHtml(s.url)}</div>
+    <div class="fc">
+      <div class="fc-header">
+        <div style="min-width:0;flex:1">
+          <div style="font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${escapeHtml(s.id)} — ${escapeHtml(s.triggerDesc)}
+          </div>
+          <div style="color:var(--muted);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${escapeHtml(s.url)}
+          </div>
+          ${summary}
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-          ${frame ? `<span class="chip ok">Matched: ${escapeHtml(frame.name)}</span>` : `<span class="chip warn">No match</span>`}
-          ${errs  ? `<span class="chip err">${errs} error${errs > 1 ? "s" : ""}</span>` : ""}
-          ${warns ? `<span class="chip warn">${warns} warning${warns > 1 ? "s" : ""}</span>` : ""}
-          ${!errs && !warns ? `<span class="chip ok">Clean</span>` : ""}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center;flex-shrink:0;margin-left:12px">
+          ${frame ? `<span class="chip ok" style="font-size:11px">${escapeHtml(frame.name)}</span>` : `<span class="chip warn" style="font-size:11px">No match</span>`}
+          ${errs  ? `<span class="chip err" style="font-size:11px">${errs}E</span>` : ""}
+          ${warns ? `<span class="chip warn" style="font-size:11px">${warns}W</span>` : ""}
+          ${!errs && !warns && frame ? `<span class="chip ok" style="font-size:11px">✓ Clean</span>` : ""}
+          ${ring}
+          <span class="fc-chevron">▶</span>
         </div>
       </div>
-      <!-- Screenshots — always visible, side by side -->
-      <div style="padding:16px 18px;border-bottom:1px solid var(--border)">
-        ${screenshotRow}
-      </div>
-      <!-- Findings — collapsible -->
-      <div style="padding:14px 18px">
-        <div style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;
-                    letter-spacing:.06em;margin-bottom:10px">Issues Found</div>
-        ${findingsList}
+      <div class="fc-body">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="screenshots">Screenshots</button>
+          <button class="tab-btn" data-tab="dimensions">Dimensions</button>
+          <button class="tab-btn" data-tab="issues">Issues ${errs + warns > 0 ? `(${errs + warns})` : ""}</button>
+        </div>
+        <div class="tab-pane active" data-tab="screenshots">${tabScreenshots}</div>
+        <div class="tab-pane" data-tab="dimensions">${tabDimensions}</div>
+        <div class="tab-pane" data-tab="issues">${tabIssues}</div>
       </div>
     </div>`;
   }).join("");
@@ -437,7 +530,7 @@ function renderPrd(acs) {
   </table>`;
 }
 
-// ─── frame-by-frame deep analysis (7 dimensions) ───────────────────────────
+// ─── dimension analysis (7 dimensions) ─────────────────────────────────────
 
 const DIM_META = {
   layoutStructure:    { label: "Layout & Structure",   icon: "⬛" },
@@ -449,53 +542,12 @@ const DIM_META = {
   contentAccuracy:    { label: "Content Accuracy",      icon: "📝" },
 };
 
-function renderFrameAnalyses(frameAnalyses) {
-  if (!frameAnalyses.length) return `<p style="color:var(--muted)">No frame analyses available.</p>`;
-  return frameAnalyses.map((fa) => renderOneFrameAnalysis(fa)).join("");
-}
-
-function renderOneFrameAnalysis(fa) {
-  const a     = fa.analysis ?? {};
-  const score = fa.frameScore ?? 0;
-  const rc    = score >= 75 ? "#22c55e" : score >= 50 ? "#eab308" : "#ef4444";
-
-  // Score ring
-  const ring = `
-    <div class="score-ring" style="border-color:${rc};color:${rc}">
-      ${score}<span class="ring-label" style="color:var(--muted)">/100</span>
-    </div>`;
-
-  // Side-by-side screenshots
-  const screenshots = (fa.liveScreenshot || fa.figmaScreenshot) ? `
-    <div class="fa-screenshots">
-      ${fa.liveScreenshot ? `
-        <div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;font-weight:600">
-            LIVE · <span style="text-transform:none;font-weight:400">${escapeHtml(fa.liveUrl ?? "")}</span>
-          </div>
-          <img src="data:image/png;base64,${fa.liveScreenshot}"
-               style="width:100%;border:2px solid #3b82f6;border-radius:8px;display:block">
-        </div>` : ""}
-      ${fa.figmaScreenshot ? `
-        <div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;font-weight:600">
-            FIGMA · <span style="text-transform:none;font-weight:400">${escapeHtml(fa.frameName)}</span>
-          </div>
-          <img src="data:image/png;base64,${fa.figmaScreenshot}"
-               style="width:100%;border:2px solid #22c55e;border-radius:8px;display:block;background:#fff">
-        </div>` : `
-        <div style="display:flex;align-items:center;justify-content:center;
-                    border:2px dashed var(--border);border-radius:8px;color:var(--dim);font-size:13px;padding:40px">
-          No Figma PNG (text+structure match only)
-        </div>`}
-    </div>` : "";
-
-  // 7-dimension grid
-  const dims = a.dimensions ?? {};
-  const dimGrid = Object.entries(DIM_META).map(([key, meta]) => {
-    const d    = dims[key] ?? { score: 0, status: "deviates", notes: "—", issues: [] };
-    const dc   = d.score >= 75 ? "#22c55e" : d.score >= 50 ? "#eab308" : "#ef4444";
-    const sc   = d.status === "matches" ? "status-matches" : d.status === "partial" ? "status-partial" : "status-deviates";
+function renderDimGrid(fa) {
+  const dims = fa.analysis?.dimensions ?? {};
+  const cards = Object.entries(DIM_META).map(([key, meta]) => {
+    const d  = dims[key] ?? { score: 0, status: "deviates", notes: "—", issues: [] };
+    const dc = d.score >= 75 ? "#22c55e" : d.score >= 50 ? "#eab308" : "#ef4444";
+    const sc = d.status === "matches" ? "status-matches" : d.status === "partial" ? "status-partial" : "status-deviates";
     const issues = (d.issues ?? []).map((iss) =>
       `<li style="font-size:12px;padding:3px 0;border-bottom:1px solid #1a2235;color:var(--text)">${escapeHtml(iss)}</li>`
     ).join("");
@@ -506,31 +558,13 @@ function renderOneFrameAnalysis(fa) {
             <div style="font-weight:700;font-size:13px">${escapeHtml(meta.label)}</div>
             <span class="status-badge ${sc}" style="margin-top:4px;display:inline-block">${escapeHtml(d.status)}</span>
           </div>
-          <div style="font-size:26px;font-weight:900;color:${dc};line-height:1">${d.score}</div>
+          <div style="font-size:24px;font-weight:900;color:${dc};line-height:1">${d.score}</div>
         </div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${escapeHtml(d.notes)}</div>
         ${issues ? `<ul style="margin:0;padding:0 0 0 12px">${issues}</ul>` : ""}
       </div>`;
   }).join("");
-
-  return `
-  <div class="fa-frame">
-    <div class="fa-header">
-      <div style="flex:1">
-        <h3 style="margin:0 0 4px 0">${escapeHtml(fa.stateId)} — ${escapeHtml(fa.frameName)}</h3>
-        <div class="sub">${escapeHtml(fa.triggerDesc ?? "")} · ${escapeHtml(fa.liveUrl ?? "")}</div>
-        ${fa.summary ? `<div style="font-size:13px;margin-top:8px;color:#94a3b8;font-style:italic">"${escapeHtml(fa.summary)}"</div>` : ""}
-      </div>
-      ${ring}
-    </div>
-    ${screenshots}
-    <div style="padding:16px 22px">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">
-        Dimension Analysis
-      </div>
-      <div class="fa-dim-grid">${dimGrid}</div>
-    </div>
-  </div>`;
+  return `<div class="fa-dim-grid">${cards}</div>`;
 }
 
 // ─── combined assessment ────────────────────────────────────────────────────
