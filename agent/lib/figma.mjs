@@ -265,14 +265,36 @@ export async function exportFramesPngBatch(fileKey, nodeIds, token, scale = 1) {
     token
   );
   const data  = await res.json();
+
+  // Figma can return 200 with an error body (e.g. "Rate limit exceeded")
+  if (data.err) throw new Error(`Figma images API error: ${data.err}`);
+
+  const imageEntries = Object.entries(data.images ?? {});
+  const nullUrls = imageEntries.filter(([, u]) => !u).length;
+  console.log(`   Figma images response: ${imageEntries.length} URL(s) (${nullUrls} null) for ${nodeIds.length} requested node(s)`);
+  if (imageEntries.length === 0) {
+    console.warn(`   ⚠ Figma returned empty images object. Full response: ${JSON.stringify(data).slice(0, 300)}`);
+  }
+
   const result = {};
-  await Promise.all(
-    Object.entries(data.images ?? {}).map(async ([id, url]) => {
-      if (!url) return;
-      const buf = await fetch(url).then((r) => r.arrayBuffer());
-      result[id] = Buffer.from(buf);
+  // Use allSettled so one failed download doesn't abort the entire batch
+  await Promise.allSettled(
+    imageEntries.map(async ([id, url]) => {
+      if (!url) {
+        console.warn(`   ⚠ No URL for node ${id} (Figma returned null)`);
+        return;
+      }
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+        const buf = await r.arrayBuffer();
+        result[id] = Buffer.from(buf);
+      } catch (e) {
+        console.warn(`   ⚠ PNG download failed for ${id}: ${e.message.slice(0, 80)}`);
+      }
     })
   );
+  console.log(`   Downloaded ${Object.keys(result).length}/${imageEntries.length} PNG(s)`);
   return result;
 }
 
