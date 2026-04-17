@@ -109,6 +109,21 @@ export async function exploreStates({
       continue;
     }
 
+    // ── Reveal hover-only row action buttons (3-dot menus, edit icons) ────────
+    // Ant Design hides action buttons until hover via CSS; force them visible
+    await page.addStyleTag({
+      content: `
+        .ant-table-row td .ant-btn, .ant-table-row td .ant-space .ant-btn,
+        .ant-table-row td .ant-dropdown-trigger, [data-row-key] td .ant-btn,
+        .ant-table-cell .ant-btn-icon-only, .ant-table-row td [role="button"],
+        tr td .ant-space, tr td .ant-space-item
+        { opacity:1!important; visibility:visible!important; pointer-events:auto!important; }
+      `,
+    }).catch(() => {});
+    // Hover first table row so any JS-based hover reveals also fire
+    await page.locator('[data-row-key], .ant-table-row').first().hover({ force: true }).catch(() => {});
+    await page.waitForTimeout(300);
+
     const clickables = await collectClickables(page);
     console.log(`   → state ${parent.id}: ${clickables.length} clickable candidates`);
 
@@ -223,6 +238,20 @@ async function collectClickables(page) {
       // Inputs that open pickers
       'input[type="button"]',
       'input[type="submit"]',
+      // Row action buttons (3-dot menu, edit, configure, pin, delete)
+      'td .ant-btn',
+      'td .ant-dropdown-trigger',
+      '.ant-table-cell .ant-btn',
+      '.ant-table-cell .ant-btn-icon-only',
+      'td .ant-space .ant-btn',
+      // Icon-only buttons (ellipsis / more / kebab menus)
+      '[aria-label*="more" i]',
+      '[aria-label*="ellipsis" i]',
+      '[title*="more" i]',
+      '[title*="action" i]',
+      // Generic table cell interactive elements
+      'td button',
+      'td [role="button"]',
     ];
 
     const seen    = new Set();
@@ -264,7 +293,7 @@ async function collectClickables(page) {
         seen.add(selector);
 
         out.push({ selector, text: text || `[${el.tagName.toLowerCase()}]`, tag: el.tagName.toLowerCase() });
-        if (out.length >= 30) return out;  // cap per state at 30
+        if (out.length >= 45) return out;  // cap per state at 45
       }
     }
     return out;

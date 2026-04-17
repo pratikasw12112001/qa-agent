@@ -129,6 +129,10 @@ export function generateReport({
   .insight-list li { padding: 6px 0; font-size: 14px; border-bottom: 1px solid var(--border); }
   .insight-list li:last-child { border-bottom: none; }
   .insight-list li::before { content: "→ "; color: var(--blue); font-weight: 700; }
+
+  /* 7-dimension card grid */
+  .fa-dim-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .fa-dim-card { background: #0e1626; border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
 </style>
 </head>
 <body>
@@ -423,7 +427,17 @@ function renderPrd(acs) {
   </table>`;
 }
 
-// ─── frame-by-frame deep analysis ──────────────────────────────────────────
+// ─── frame-by-frame deep analysis (7 dimensions) ───────────────────────────
+
+const DIM_META = {
+  layoutStructure:    { label: "Layout & Structure",   icon: "⬛" },
+  typography:         { label: "Typography",            icon: "🔤" },
+  colors:             { label: "Colors",                icon: "🎨" },
+  componentStyling:   { label: "Component Styling",     icon: "🧩" },
+  iconsAssets:        { label: "Icons & Assets",        icon: "🖼" },
+  interactionsStates: { label: "Interactions & States", icon: "👆" },
+  contentAccuracy:    { label: "Content Accuracy",      icon: "📝" },
+};
 
 function renderFrameAnalyses(frameAnalyses) {
   if (!frameAnalyses.length) return `<p style="color:var(--muted)">No frame analyses available.</p>`;
@@ -431,18 +445,17 @@ function renderFrameAnalyses(frameAnalyses) {
 }
 
 function renderOneFrameAnalysis(fa) {
-  const a = fa.analysis;
+  const a     = fa.analysis ?? {};
   const score = fa.frameScore ?? 0;
-  const ringColor = score >= 75 ? "#22c55e" : score >= 50 ? "#eab308" : "#ef4444";
+  const rc    = score >= 75 ? "#22c55e" : score >= 50 ? "#eab308" : "#ef4444";
 
   // Score ring
   const ring = `
-    <div class="score-ring" style="border-color:${ringColor};color:${ringColor}">
-      ${score}
-      <span class="ring-label" style="color:var(--muted)">/ 100</span>
+    <div class="score-ring" style="border-color:${rc};color:${rc}">
+      ${score}<span class="ring-label" style="color:var(--muted)">/100</span>
     </div>`;
 
-  // Screenshots
+  // Side-by-side screenshots
   const screenshots = (fa.liveScreenshot || fa.figmaScreenshot) ? `
     <div class="fa-screenshots">
       ${fa.liveScreenshot ? `
@@ -450,101 +463,63 @@ function renderOneFrameAnalysis(fa) {
           <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;font-weight:600">
             LIVE · <span style="text-transform:none;font-weight:400">${escapeHtml(fa.liveUrl ?? "")}</span>
           </div>
-          <img src="data:image/png;base64,${fa.liveScreenshot}" style="width:100%;border:2px solid #3b82f6;border-radius:8px;display:block">
+          <img src="data:image/png;base64,${fa.liveScreenshot}"
+               style="width:100%;border:2px solid #3b82f6;border-radius:8px;display:block">
         </div>` : ""}
       ${fa.figmaScreenshot ? `
         <div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;font-weight:600">
             FIGMA · <span style="text-transform:none;font-weight:400">${escapeHtml(fa.frameName)}</span>
           </div>
-          <img src="data:image/png;base64,${fa.figmaScreenshot}" style="width:100%;border:2px solid #22c55e;border-radius:8px;display:block;background:#fff">
-        </div>` : ""}
+          <img src="data:image/png;base64,${fa.figmaScreenshot}"
+               style="width:100%;border:2px solid #22c55e;border-radius:8px;display:block;background:#fff">
+        </div>` : `
+        <div style="display:flex;align-items:center;justify-content:center;
+                    border:2px dashed var(--border);border-radius:8px;color:var(--dim);font-size:13px;padding:40px">
+          No Figma PNG (text+structure match only)
+        </div>`}
     </div>` : "";
 
-  // Design Patterns
-  const dpStatus = a.designPatterns?.status ?? "unknown";
-  const dpClass  = dpStatus === "matches" ? "status-matches" : dpStatus === "partial" ? "status-partial" : "status-deviates";
-  const designPatterns = `
-    <div class="fa-cat">
-      <div class="fa-cat-title">Design Patterns
-        <span class="status-badge ${dpClass}">${escapeHtml(dpStatus)}</span>
-      </div>
-      <p style="font-size:13px;margin:0;color:var(--text)">${escapeHtml(a.designPatterns?.notes ?? "No notes.")}</p>
-    </div>`;
-
-  // Interactions
-  const interactions = (a.interactions?.length) ? `
-    <div class="fa-cat">
-      <div class="fa-cat-title">Interactions</div>
-      ${a.interactions.map((it) => `
-        <div class="fa-row">
-          <div class="fa-key">${escapeHtml(it.element ?? "")}</div>
+  // 7-dimension grid
+  const dims = a.dimensions ?? {};
+  const dimGrid = Object.entries(DIM_META).map(([key, meta]) => {
+    const d    = dims[key] ?? { score: 0, status: "deviates", notes: "—", issues: [] };
+    const dc   = d.score >= 75 ? "#22c55e" : d.score >= 50 ? "#eab308" : "#ef4444";
+    const sc   = d.status === "matches" ? "status-matches" : d.status === "partial" ? "status-partial" : "status-deviates";
+    const issues = (d.issues ?? []).map((iss) =>
+      `<li style="font-size:12px;padding:3px 0;border-bottom:1px solid #1a2235;color:var(--text)">${escapeHtml(iss)}</li>`
+    ).join("");
+    return `
+      <div class="fa-dim-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <div>
-            <span class="status-badge status-${it.status ?? "wrong"}">${escapeHtml(it.status ?? "")}</span>
-            <span style="font-size:13px;margin-left:8px">${escapeHtml(it.note ?? "")}</span>
+            <div style="font-weight:700;font-size:13px">${escapeHtml(meta.label)}</div>
+            <span class="status-badge ${sc}" style="margin-top:4px;display:inline-block">${escapeHtml(d.status)}</span>
           </div>
-        </div>`).join("")}
-    </div>` : "";
-
-  // Spacing
-  const spacing = (a.spacing?.length) ? `
-    <div class="fa-cat">
-      <div class="fa-cat-title">Spacing &amp; Layout</div>
-      ${a.spacing.map((sp) => `
-        <div class="fa-row">
-          <div class="fa-key">${escapeHtml(sp.area ?? "")}</div>
-          <div class="sev-${sp.severity ?? "warn"}">${escapeHtml(sp.note ?? "")}</div>
-        </div>`).join("")}
-    </div>` : "";
-
-  // Colors
-  const colors = (a.colors?.length) ? `
-    <div class="fa-cat">
-      <div class="fa-cat-title">Color Style</div>
-      <table style="font-size:13px">
-        <thead><tr><th>Element</th><th>Live</th><th>Figma</th><th>Status</th></tr></thead>
-        <tbody>
-          ${a.colors.map((c) => `
-            <tr>
-              <td>${escapeHtml(c.element ?? "")}</td>
-              <td style="font-family:monospace">${escapeHtml(c.liveColor ?? "")}</td>
-              <td style="font-family:monospace">${escapeHtml(c.figmaColor ?? "")}</td>
-              <td class="sev-${c.severity ?? "ok"}">${escapeHtml(c.severity ?? "ok")}</td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>` : "";
-
-  // Inaccuracies
-  const inaccuracies = (a.inaccuracies?.length) ? `
-    <div class="fa-cat">
-      <div class="fa-cat-title">Inaccuracies</div>
-      ${a.inaccuracies.map((inc) => `
-        <div class="finding ${inc.severity === "error" ? "error" : inc.severity === "warn" ? "warn" : "info"}">
-          <div class="head">
-            <span>${escapeHtml((inc.type ?? "general").toUpperCase())}</span>
-            <span>·</span><span>${escapeHtml(inc.severity ?? "info")}</span>
-          </div>
-          <div class="desc">${escapeHtml(inc.description ?? "")}</div>
-        </div>`).join("")}
-    </div>` : "";
+          <div style="font-size:26px;font-weight:900;color:${dc};line-height:1">${d.score}</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${escapeHtml(d.notes)}</div>
+        ${issues ? `<ul style="margin:0;padding:0 0 0 12px">${issues}</ul>` : ""}
+      </div>`;
+  }).join("");
 
   return `
   <div class="fa-frame">
     <div class="fa-header">
-      <div>
-        <h3>${escapeHtml(fa.stateId)} — ${escapeHtml(fa.frameName)}</h3>
+      <div style="flex:1">
+        <h3 style="margin:0 0 4px 0">${escapeHtml(fa.stateId)} — ${escapeHtml(fa.frameName)}</h3>
         <div class="sub">${escapeHtml(fa.triggerDesc ?? "")} · ${escapeHtml(fa.liveUrl ?? "")}</div>
-        ${fa.summary ? `<div style="font-size:13px;margin-top:8px;color:var(--text);font-style:italic">"${escapeHtml(fa.summary)}"</div>` : ""}
+        ${fa.summary ? `<div style="font-size:13px;margin-top:8px;color:#94a3b8;font-style:italic">"${escapeHtml(fa.summary)}"</div>` : ""}
       </div>
       ${ring}
     </div>
     ${screenshots}
-    ${designPatterns}
-    ${interactions}
-    ${spacing}
-    ${colors}
-    ${inaccuracies}
+    <div style="padding:16px 22px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">
+        Dimension Analysis
+      </div>
+      <div class="fa-dim-grid">${dimGrid}</div>
+    </div>
   </div>`;
 }
 
@@ -557,60 +532,75 @@ function renderCombinedAssessment(frameAnalyses) {
   const avg    = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
   const color  = avg >= 75 ? "#22c55e" : avg >= 50 ? "#eab308" : "#ef4444";
 
-  // Aggregate theme counts
-  const dpCounts = { matches: 0, partial: 0, deviates: 0, unknown: 0 };
-  let totalInaccuracies = 0, totalColorIssues = 0, totalSpacingIssues = 0, totalMissingInteractions = 0;
-
-  for (const fa of frameAnalyses) {
-    const a = fa.analysis;
-    const dp = a.designPatterns?.status ?? "unknown";
-    dpCounts[dp] = (dpCounts[dp] ?? 0) + 1;
-    totalInaccuracies     += (a.inaccuracies ?? []).filter((x) => x.severity === "error" || x.severity === "warn").length;
-    totalColorIssues      += (a.colors       ?? []).filter((x) => x.severity !== "ok").length;
-    totalSpacingIssues    += (a.spacing      ?? []).filter((x) => x.severity !== "ok").length;
-    totalMissingInteractions += (a.interactions ?? []).filter((x) => x.status === "missing").length;
+  // Per-dimension averages across all frames
+  const dimAvgs = {};
+  for (const key of Object.keys(DIM_META)) {
+    const vals = frameAnalyses
+      .map((fa) => fa.analysis?.dimensions?.[key]?.score ?? 0)
+      .filter((v) => v > 0);
+    dimAvgs[key] = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
   }
 
-  // Build insights list
+  // Build insights from dimension averages
   const insights = [];
-  if (dpCounts.matches > 0)
-    insights.push(`${dpCounts.matches} of ${frameAnalyses.length} frame(s) have design patterns matching the Figma spec.`);
-  if (dpCounts.deviates > 0)
-    insights.push(`${dpCounts.deviates} frame(s) show significant layout/pattern deviations from Figma.`);
-  if (dpCounts.partial > 0)
-    insights.push(`${dpCounts.partial} frame(s) partially match the design — needs designer review.`);
-  if (totalMissingInteractions > 0)
-    insights.push(`${totalMissingInteractions} interaction element(s) are missing or incorrectly implemented.`);
-  if (totalColorIssues > 0)
-    insights.push(`${totalColorIssues} color / style discrepancies found across all frames.`);
-  if (totalSpacingIssues > 0)
-    insights.push(`${totalSpacingIssues} spacing / padding issues detected.`);
-  if (totalInaccuracies > 0)
-    insights.push(`${totalInaccuracies} content or visual inaccuracy(ies) flagged (errors + warnings).`);
+  for (const [key, meta] of Object.entries(DIM_META)) {
+    const avg2 = dimAvgs[key];
+    if (avg2 < 50)
+      insights.push(`${meta.label}: avg ${avg2}/100 — significant deviations across frames.`);
+    else if (avg2 < 75)
+      insights.push(`${meta.label}: avg ${avg2}/100 — partial match, review recommended.`);
+  }
+  const deviateCount = frameAnalyses.filter((fa) =>
+    Object.values(fa.analysis?.dimensions ?? {}).some((d) => d.status === "deviates")
+  ).length;
+  if (deviateCount > 0)
+    insights.push(`${deviateCount} frame(s) have at least one dimension deviating from the Figma design.`);
   if (insights.length === 0)
-    insights.push("All analyzed frames are consistent with the Figma design.");
+    insights.push("All analyzed dimensions are consistent with the Figma design — great job!");
+
+  // Dimension summary bar
+  const dimSummary = Object.entries(DIM_META).map(([key, meta]) => {
+    const s  = dimAvgs[key];
+    const c  = s >= 75 ? "#22c55e" : s >= 50 ? "#eab308" : "#ef4444";
+    return `
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+          <span>${escapeHtml(meta.label)}</span>
+          <span style="font-weight:700;color:${c}">${s}/100</span>
+        </div>
+        <div style="background:#1a2235;border-radius:4px;height:6px">
+          <div style="background:${c};height:6px;border-radius:4px;width:${s}%"></div>
+        </div>
+      </div>`;
+  }).join("");
 
   // Per-frame score table
   const scoreTable = `
-    <table style="margin-top:16px">
-      <thead><tr><th>State</th><th>Figma Frame</th><th>Score</th><th>Design Patterns</th><th>Summary</th></tr></thead>
+    <table style="margin-top:20px">
+      <thead><tr><th>State</th><th>Figma Frame</th><th>Score</th>${Object.values(DIM_META).map((m) => `<th>${escapeHtml(m.label)}</th>`).join("")}</tr></thead>
       <tbody>
         ${frameAnalyses.map((fa) => {
-          const s = fa.frameScore ?? 0;
-          const c = s >= 75 ? "#22c55e" : s >= 50 ? "#eab308" : "#ef4444";
-          const dp = fa.analysis.designPatterns?.status ?? "—";
+          const s  = fa.frameScore ?? 0;
+          const sc = s >= 75 ? "#22c55e" : s >= 50 ? "#eab308" : "#ef4444";
+          const dimCells = Object.keys(DIM_META).map((key) => {
+            const ds = fa.analysis?.dimensions?.[key]?.score ?? 0;
+            const dc = ds >= 75 ? "#22c55e" : ds >= 50 ? "#eab308" : "#ef4444";
+            return `<td style="font-weight:600;color:${dc};font-size:12px">${ds}</td>`;
+          }).join("");
           return `<tr>
             <td><code>${escapeHtml(fa.stateId)}</code></td>
-            <td>${escapeHtml(fa.frameName)}</td>
-            <td style="font-weight:700;color:${c}">${s} / 100</td>
-            <td><span class="status-badge status-${dp}">${escapeHtml(dp)}</span></td>
-            <td style="font-size:12px;color:var(--muted)">${escapeHtml((fa.summary ?? "").slice(0, 100))}</td>
+            <td style="font-size:12px">${escapeHtml(fa.frameName)}</td>
+            <td style="font-weight:800;color:${sc}">${s}</td>
+            ${dimCells}
           </tr>`;
         }).join("")}
-        <tr style="border-top:2px solid var(--border)">
+        <tr style="border-top:2px solid var(--border);background:var(--panel)">
           <td colspan="2" style="font-weight:700">COMBINED AVERAGE</td>
-          <td style="font-weight:900;font-size:18px;color:${color}">${avg} / 100</td>
-          <td colspan="2" style="color:var(--muted);font-size:12px">${frameAnalyses.length} frame(s) analyzed</td>
+          <td style="font-weight:900;font-size:18px;color:${color}">${avg}</td>
+          ${Object.keys(DIM_META).map((k) => {
+            const s = dimAvgs[k]; const c = s >= 75 ? "#22c55e" : s >= 50 ? "#eab308" : "#ef4444";
+            return `<td style="font-weight:700;color:${c};font-size:12px">${s}</td>`;
+          }).join("")}
         </tr>
       </tbody>
     </table>`;
@@ -620,16 +610,20 @@ function renderCombinedAssessment(frameAnalyses) {
       <div class="combined-score">
         <div class="big-score" style="color:${color}">${avg}</div>
         <div class="label">Overall Score</div>
-        <div style="font-size:12px;color:var(--dim);margin-top:4px">out of 100</div>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">${frameAnalyses.length} frame(s)</div>
       </div>
-      <div>
-        <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">
-          Summary Insights
-        </div>
-        <ul class="insight-list">
-          ${insights.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}
-        </ul>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;
+                    letter-spacing:.08em;margin-bottom:12px">Dimension Averages</div>
+        ${dimSummary}
       </div>
+    </div>
+    <div style="margin-top:16px">
+      <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;
+                  letter-spacing:.08em;margin-bottom:10px">Key Insights</div>
+      <ul class="insight-list">
+        ${insights.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}
+      </ul>
     </div>
     ${scoreTable}`;
 }
