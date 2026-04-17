@@ -235,50 +235,81 @@ function renderStateGraph(states, matches) {
 function renderStateFindings(states, matches, allFindings, frames) {
   if (states.length === 0) return `<p style="color:var(--muted)">No data.</p>`;
   return states.map((s) => {
-    const m = matches.find((x) => x.stateId === s.id);
-    const frame = m?.frameId ? frames.find((f) => f.id === m.frameId) : null;
+    const m        = matches.find((x) => x.stateId === s.id);
+    const frame    = m?.frameId ? frames.find((f) => f.id === m.frameId) : null;
     const findings = allFindings.filter((f) => f.stateId === s.id);
+    const errs     = findings.filter((f) => f.severity === "error").length;
+    const warns    = findings.filter((f) => f.severity === "warn").length;
 
-    const liveImg  = s.screenshot ? `<figure style="margin:0">
-        <figcaption style="font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em">LIVE · ${escapeHtml(s.url)}</figcaption>
-        <img src="data:image/png;base64,${s.screenshot}" alt="live" style="width:100%;border:1px solid var(--border);border-radius:8px;background:#000">
-      </figure>` : "";
-    const figmaImg = m?.framePng ? `<figure style="margin:0">
-        <figcaption style="font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em">FIGMA · ${escapeHtml(frame?.name ?? "—")}</figcaption>
-        <img src="data:image/png;base64,${m.framePng}" alt="figma" style="width:100%;border:1px solid var(--border);border-radius:8px;background:#fff">
-      </figure>` : `<figure style="margin:0">
-        <figcaption style="font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em">FIGMA · no match</figcaption>
-        <div style="width:100%;height:200px;border:1px dashed var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px">No Figma frame matched</div>
-      </figure>`;
-    const imgs = (liveImg || figmaImg) ? `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-        ${liveImg}${figmaImg}
+    // ── Screenshots always visible (not behind toggle) ────────────────────
+    const liveImg = s.screenshot ? `
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
+          LIVE SCREENSHOT · <span style="text-transform:none;font-weight:400">${escapeHtml(s.url)}</span>
+        </div>
+        <img src="data:image/png;base64,${s.screenshot}" alt="live screenshot"
+          style="width:100%;border:2px solid #3b82f6;border-radius:8px;display:block">
       </div>` : "";
 
-    const errs  = findings.filter((f) => f.severity === "error").length;
-    const warns = findings.filter((f) => f.severity === "warn").length;
-
-    return `<div class="state">
-      <div class="state-header">
-        <div>
-          <div class="state-title">${escapeHtml(s.id)} — ${escapeHtml(s.triggerDesc)}</div>
-          <div class="state-sub">${escapeHtml(s.url)} · ${frame ? "matched to " + escapeHtml(frame.name) : "no match"}</div>
+    const figmaImg = m?.framePng ? `
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
+          FIGMA DESIGN · <span style="text-transform:none;font-weight:400">${escapeHtml(frame?.name ?? "—")} (${(m.confidence*100).toFixed(0)}% match)</span>
         </div>
-        <div class="chips">
-          ${errs  ? `<span class="chip err">${errs} errors</span>` : ""}
-          ${warns ? `<span class="chip warn">${warns} warns</span>` : ""}
-          ${!errs && !warns ? `<span class="chip ok">OK</span>` : ""}
+        <img src="data:image/png;base64,${m.framePng}" alt="figma frame"
+          style="width:100%;border:2px solid #22c55e;border-radius:8px;display:block;background:#fff">
+      </div>` : `
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
+          FIGMA DESIGN · <span style="text-transform:none;font-weight:400">no matching frame found</span>
+        </div>
+        <div style="width:100%;height:200px;border:2px dashed var(--border);border-radius:8px;
+          display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px">
+          No Figma frame matched this state
+        </div>
+      </div>`;
+
+    const screenshotRow = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        ${liveImg}${figmaImg}
+      </div>`;
+
+    // ── Findings list ──────────────────────────────────────────────────────
+    const findingsList = findings.length ? findings.map((f) => `
+      <div class="finding ${f.severity}">
+        <div class="head">
+          <span>${escapeHtml((f.category || "general").toUpperCase())}</span>
+          <span>·</span><span>${f.severity}</span>
+        </div>
+        <div class="desc">${escapeHtml(f.description)}</div>
+        ${f.evidence ? `<div style="color:var(--muted);font-size:11px;margin-top:4px">${escapeHtml(String(f.evidence))}</div>` : ""}
+      </div>`).join("") : `<p style="color:var(--muted);font-size:13px;margin:0">No visual/content issues detected for this state.</p>`;
+
+    return `
+    <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:12px;margin-bottom:20px;overflow:hidden">
+      <!-- State header — always visible -->
+      <div style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;
+                  border-bottom:1px solid var(--border);background:var(--panel)">
+        <div>
+          <div style="font-weight:700;font-size:15px">${escapeHtml(s.id)} — ${escapeHtml(s.triggerDesc)}</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:3px">${escapeHtml(s.url)}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          ${frame ? `<span class="chip ok">Matched: ${escapeHtml(frame.name)}</span>` : `<span class="chip warn">No match</span>`}
+          ${errs  ? `<span class="chip err">${errs} error${errs > 1 ? "s" : ""}</span>` : ""}
+          ${warns ? `<span class="chip warn">${warns} warning${warns > 1 ? "s" : ""}</span>` : ""}
+          ${!errs && !warns ? `<span class="chip ok">Clean</span>` : ""}
         </div>
       </div>
-      <div class="state-body">
-        ${imgs}
-        ${findings.length ? findings.map(f =>
-          `<div class="finding ${f.severity}">
-             <div class="head"><span>${escapeHtml((f.category || "general").toUpperCase())}</span><span>·</span><span>${f.severity}</span></div>
-             <div class="desc">${escapeHtml(f.description)}</div>
-             ${f.evidence ? `<div class="k" style="color:var(--muted);font-size:11px;margin-top:4px">${escapeHtml(String(f.evidence))}</div>` : ""}
-           </div>`
-        ).join("") : `<p style="color:var(--muted);font-size:13px">No issues for this state.</p>`}
+      <!-- Screenshots — always visible, side by side -->
+      <div style="padding:16px 18px;border-bottom:1px solid var(--border)">
+        ${screenshotRow}
+      </div>
+      <!-- Findings — collapsible -->
+      <div style="padding:14px 18px">
+        <div style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;
+                    letter-spacing:.06em;margin-bottom:10px">Issues Found</div>
+        ${findingsList}
       </div>
     </div>`;
   }).join("");

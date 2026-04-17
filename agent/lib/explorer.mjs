@@ -1,21 +1,19 @@
 /**
- * Smart state-graph exploration.
+ * Smart state-graph exploration — Ant Design aware.
  *
  * Starts at the user-provided source URL (after login).
- * Clicks interactive elements in the MAIN content area (sidebar/nav excluded)
- * and captures every resulting state.
+ * Captures the root state first, then BFS-clicks interactive elements
+ * in the MAIN content area (sidebar excluded).
  *
- * Session resilience: if the loaded storageState doesn't authenticate the site
- * (SPA shows login page instead of the source URL), explorer re-logs in
- * automatically before starting exploration.
+ * Session resilience: if storageState doesn't restore auth (SPA shows login),
+ * re-logs in automatically before starting.
  */
 
 import { chromium } from "playwright";
 import { createHash } from "crypto";
 import { detectLoginPage, performLoginOnPage } from "./auth.mjs";
 
-// ── Selectors to exclude from clicking ───────────────────────────────────────
-
+// ── Sidebar selectors — never click anything inside these ─────────────────────
 const SIDEBAR_SELECTORS = [
   ".ant-menu", ".ant-layout-sider", ".ant-menu-root",
   '[class*="sidebar" i]', '[class*="side-bar" i]',
@@ -26,7 +24,7 @@ const SIDEBAR_SELECTORS = [
   'nav[role="navigation"]',
 ].join(", ");
 
-// Text patterns we must never click
+// ── Text we must never click ──────────────────────────────────────────────────
 const BLOCKED_TEXT = [
   "log out", "logout", "sign out", "signout",
   "delete account", "delete", "remove account",
@@ -34,14 +32,11 @@ const BLOCKED_TEXT = [
   "privacy policy", "terms", "terms & conditions", "terms of service",
   "cookie policy", "legal",
   "register", "sign up", "create account",
+  "go back to login", "back to login",
 ];
 
-// URL fragments that indicate we've left the app and should skip the state
-const BLOCKED_URL_PATTERNS = [
-  /\/(login|signin|auth|logout)/i,
-  /\/(terms|privacy|legal|cookie)/i,
-  /^https?:\/\/(?!mtfuji-test\.elixa\.ai)/,  // different domain
-];
+// ── URL patterns that mean we've left the target app ─────────────────────────
+const BLOCKED_URL_RE = /\/(login|signin|auth|logout|terms|privacy|legal|cookie)/i;
 
 export async function exploreStates({
   liveUrl, sessionPath, maxStates = 30, maxDepth = 3, waitAfterClickMs = 1200,
@@ -56,36 +51,35 @@ export async function exploreStates({
   });
   const page = await context.newPage();
 
-  // ── Session check: if storageState didn't work, re-login ─────────────────
+  // ── Navigate to source URL and ensure we're authenticated ────────────────
   console.log(`   → opening source URL: ${liveUrl}`);
   await page.goto(liveUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
+  await page.waitForTimeout(2000);  // let SPA fully hydrate
 
-  const onLoginPage = await detectLoginPage(page);
-  if (onLoginPage) {
+  if (await detectLoginPage(page)) {
     console.log(`   → session not recognised — re-logging in`);
     await performLoginOnPage(page, email, password);
     console.log(`   → navigating to source URL: ${liveUrl}`);
     await page.goto(liveUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
-    await page.waitForTimeout(1500);
-
-    // Verify login worked
-    const stillLogin = await detectLoginPage(page);
-    if (stillLogin) throw new Error("Explorer re-login failed — still on login page");
-    console.log(`   → authenticated, on: ${page.url()}`);
+    await page.waitForTimeout(2500);
+    if (await detectLoginPage(page)) throw new Error("Explorer re-login failed");
+    console.log(`   → authenticated, url: ${page.url()}`);
   }
 
-  const states = [];
-  const seenHashes = new Set();
+  const states      = [];
+  const seenHashes  = new Set();
+  const clickedKeys = new Set();  // global dedup of (stateHash, elementText) pairs
 
-  // Capture root state at the ACTUAL post-auth URL
+  // ── Capture root state ───────────────────────────────────────────────────
   const root = await captureState(page, {
     id: "s0", parent: null, triggerDesc: "initial load",
     url: page.url(), depth: 0,
   });
   states.push(root);
   seenHashes.add(root.hash);
+  console.log(`   → root state captured: ${root.url}`);
 
   const queue = [{ stateId: root.id, depth: 0 }];
   let stateCounter = 1;
@@ -95,21 +89,20 @@ export async function exploreStates({
     if (depth >= maxDepth) continue;
 
     const parent = states.find((s) => s.id === stateId);
-    if (!parent) continue;
-
-    // Skip re-exploring states that are off-target
-    if (isBlockedUrl(parent.url)) continue;
+    if (!parent || BLOCKED_URL_RE.test(parent.url)) continue;
 
     try {
       await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(800);
 
-      // If session expired mid-run, re-authenticate
+      // Session guard
       if (await detectLoginPage(page)) {
         console.log(`   → mid-run session expired, re-logging in`);
         await performLoginOnPage(page, email, password);
         await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+        await page.waitForTimeout(1500);
       }
     } catch (e) {
       console.warn(`   ⚠ failed to re-open ${parent.url}: ${e.message.slice(0, 60)}`);
@@ -121,6 +114,11 @@ export async function exploreStates({
 
     for (const el of clickables) {
       if (states.length >= maxStates) break;
+
+      // Global dedup: don't repeat (parent-url, element-text) combination
+      const globalKey = `${parent.url}::${el.text}`;
+      if (clickedKeys.has(globalKey)) continue;
+      clickedKeys.add(globalKey);
 
       const beforeUrl  = page.url();
       const beforeHash = await domHash(page);
@@ -137,8 +135,8 @@ export async function exploreStates({
         const afterUrl  = page.url();
         const afterHash = await domHash(page);
 
-        // Skip if we navigated to a blocked URL
-        if (isBlockedUrl(afterUrl)) {
+        // Bail if we landed on a blocked URL
+        if (BLOCKED_URL_RE.test(afterUrl)) {
           await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
           await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
           continue;
@@ -146,8 +144,8 @@ export async function exploreStates({
 
         const urlChanged = afterUrl !== beforeUrl;
         const domChanged = afterHash !== beforeHash;
-
         if (!urlChanged && !domChanged) continue;
+
         if (seenHashes.has(afterHash)) {
           if (urlChanged) {
             await page.goto(parent.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
@@ -175,7 +173,7 @@ export async function exploreStates({
           await dismissOverlay(page);
         }
       } catch {
-        // swallow — try next element
+        // swallow, try next
       }
     }
   }
@@ -185,96 +183,129 @@ export async function exploreStates({
   return states;
 }
 
-// ─── helpers ────────────────────────────────────────────────────────────────
-
-function isBlockedUrl(url) {
-  if (!url) return false;
-  return BLOCKED_URL_PATTERNS.some((p) => p.test(url));
-}
-
-async function captureState(page, meta) {
-  const screenshot  = await page.screenshot({ fullPage: false, type: "png" });
-  const dom         = await page.evaluate(extractDom);
-  const textContent = dom.texts;
-  const structure   = dom.structure;
-  const hash = createHash("sha256")
-    .update(meta.url)
-    .update(textContent.join("|").slice(0, 4000))
-    .update(JSON.stringify(structure))
-    .digest("hex");
-
-  return {
-    id: meta.id, parent: meta.parent, triggerDesc: meta.triggerDesc,
-    url: meta.url, depth: meta.depth,
-    screenshot: screenshot.toString("base64"),
-    textContent, structure, hash,
-  };
-}
+// ─── collectClickables ──────────────────────────────────────────────────────
+// Broad set of selectors, Ant Design aware.
 
 async function collectClickables(page) {
   return await page.evaluate(({ sidebarSel, blocked }) => {
     function isInSidebar(el) { return !!el.closest(sidebarSel); }
 
-    const candidates = Array.from(document.querySelectorAll(
-      'button, a[href], [role="button"], [role="tab"], [role="link"], ' +
-      '[role="menuitem"], [onclick], input[type="button"], input[type="submit"], ' +
-      'tr[class*="row" i], td[class*="clickable" i], [class*="card" i]'
-    ));
+    // All candidate selectors — ordered from most to least specific
+    const SELECTORS = [
+      // Standard interactive
+      'button:not([disabled])',
+      'a[href]:not([href^="mailto"]):not([href^="tel"])',
+      // ARIA roles
+      '[role="button"]:not([disabled])',
+      '[role="tab"]',
+      '[role="menuitem"]',
+      '[role="option"]',
+      '[role="row"]',
+      // Ant Design components
+      '.ant-btn',
+      '.ant-tabs-tab',
+      '.ant-table-row',
+      '.ant-select:not(.ant-select-disabled)',
+      '.ant-picker',
+      '.ant-dropdown-trigger',
+      '.ant-card[data-toggle]',
+      '.ant-collapse-header',
+      '.ant-radio-button-wrapper',
+      '.ant-checkbox-wrapper',
+      // Generic patterns
+      '[class*="filter" i]:not(input)',
+      '[class*="search" i] button',
+      '[class*="create" i][class*="btn" i]',
+      '[class*="add" i][class*="btn" i]',
+      '[class*="edit" i][class*="btn" i]',
+      '[class*="row" i][class*="clickable" i]',
+      '[data-row-key]',
+      // Inputs that open pickers
+      'input[type="button"]',
+      'input[type="submit"]',
+    ];
 
-    const out = [];
-    const seenText = new Set();
+    const seen    = new Set();
+    const seenTxt = new Set();
+    const out     = [];
 
-    for (let i = 0; i < candidates.length; i++) {
-      const el = candidates[i];
-      if (isInSidebar(el)) continue;
+    for (const sel of SELECTORS) {
+      let els;
+      try { els = Array.from(document.querySelectorAll(sel)); } catch { continue; }
 
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 10 || rect.height < 10) continue;
-      if (rect.bottom < 0 || rect.top > 10000) continue;
+      for (const el of els) {
+        if (isInSidebar(el)) continue;
 
-      const text     = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim();
-      const textNorm = text.toLowerCase();
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 8 || rect.height < 8) continue;
+        if (rect.bottom < 0 || rect.top > window.innerHeight + 400) continue;
 
-      // Block auth/legal links
-      if (blocked.some((b) => textNorm.includes(b))) continue;
+        const text     = (el.innerText || el.textContent || el.getAttribute("aria-label") || el.getAttribute("title") || "").trim().slice(0, 60);
+        const textNorm = text.toLowerCase();
 
-      // Build selector
-      let selector;
-      if (text && text.length > 1 && text.length < 40) {
-        const tag = el.tagName.toLowerCase();
-        selector = `${tag}:has-text("${text.replace(/"/g, '\\"').slice(0, 40)}")`;
-      } else {
-        const tag = el.tagName.toLowerCase();
-        const cls = (el.className && typeof el.className === "string")
-          ? "." + el.className.trim().split(/\s+/).slice(0, 2).map(CSS.escape).join(".")
-          : "";
-        selector = `${tag}${cls}:nth-of-type(${i + 1})`;
+        if (blocked.some((b) => textNorm.includes(b))) continue;
+
+        // Stable selector
+        let selector;
+        if (el.id) {
+          selector = `#${CSS.escape(el.id)}`;
+        } else if (text && text.length > 1 && text.length < 50) {
+          selector = `${el.tagName.toLowerCase()}:has-text("${text.replace(/"/g, '\\"').slice(0, 50)}")`;
+        } else {
+          const cls = (typeof el.className === "string" && el.className.trim())
+            ? "." + el.className.trim().split(/\s+/).slice(0, 2).map(CSS.escape).join(".")
+            : "";
+          selector = `${el.tagName.toLowerCase()}${cls}`;
+        }
+
+        const key = textNorm || selector;
+        if (seenTxt.has(key) || seen.has(selector)) continue;
+        seenTxt.add(key);
+        seen.add(selector);
+
+        out.push({ selector, text: text || `[${el.tagName.toLowerCase()}]`, tag: el.tagName.toLowerCase() });
+        if (out.length >= 30) return out;  // cap per state at 30
       }
-
-      const key = textNorm || selector;
-      if (seenText.has(key)) continue;
-      seenText.add(key);
-
-      out.push({ selector, text: text || "(no text)", tag: el.tagName.toLowerCase() });
-      if (out.length >= 20) break;
     }
     return out;
   }, { sidebarSel: SIDEBAR_SELECTORS, blocked: BLOCKED_TEXT });
 }
 
+// ─── captureState ────────────────────────────────────────────────────────────
+
+async function captureState(page, meta) {
+  // Wait briefly for any pending renders
+  await page.waitForTimeout(400);
+  const screenshot  = await page.screenshot({ fullPage: false, type: "png" });
+  const dom         = await page.evaluate(extractDom);
+  const hash = createHash("sha256")
+    .update(meta.url)
+    .update(dom.texts.join("|").slice(0, 4000))
+    .update(JSON.stringify(dom.structure))
+    .digest("hex");
+  return {
+    id: meta.id, parent: meta.parent, triggerDesc: meta.triggerDesc,
+    url: meta.url, depth: meta.depth,
+    screenshot: screenshot.toString("base64"),
+    textContent: dom.texts,
+    structure: dom.structure,
+    hash,
+  };
+}
+
 function extractDom() {
   const texts = [];
-  document.querySelectorAll("h1,h2,h3,h4,h5,h6,p,span,a,button,label,td,th,li")
+  document.querySelectorAll("h1,h2,h3,h4,h5,h6,p,span,a,button,label,td,th,li,.ant-table-cell")
     .forEach((el) => {
       const t = (el.innerText || "").trim();
       if (t && t.length > 1 && t.length < 200) texts.push(t);
     });
   const structure = {
-    buttons:  document.querySelectorAll('button, [role="button"]').length,
-    inputs:   document.querySelectorAll("input, textarea, select").length,
+    buttons:  document.querySelectorAll('button, .ant-btn, [role="button"]').length,
+    inputs:   document.querySelectorAll("input, textarea, select, .ant-select, .ant-picker").length,
     images:   document.querySelectorAll("img").length,
     links:    document.querySelectorAll("a[href]").length,
-    tables:   document.querySelectorAll("table").length,
+    tables:   document.querySelectorAll("table, .ant-table").length,
     headings: document.querySelectorAll("h1,h2,h3,h4").length,
     modals:   document.querySelectorAll('[role="dialog"], .ant-modal, [class*="modal" i]').length,
     total:    document.querySelectorAll("*").length,
@@ -284,27 +315,26 @@ function extractDom() {
 
 async function domHash(page) {
   const sig = await page.evaluate(() => {
-    const counts = {
-      modals: document.querySelectorAll('[role="dialog"], .ant-modal:not([aria-hidden="true"]), [class*="modal" i]').length,
-      total:  document.querySelectorAll("*").length,
-    };
-    const firstH = (document.querySelector("h1,h2,h3") || {}).innerText || "";
-    return `${document.location.href}|${counts.modals}|${counts.total}|${firstH}`;
+    const modals  = document.querySelectorAll('[role="dialog"], .ant-modal:not([aria-hidden="true"])').length;
+    const total   = document.querySelectorAll("*").length;
+    const firstH  = (document.querySelector("h1,h2,h3,.ant-page-header-heading-title") || {}).innerText || "";
+    const drawers = document.querySelectorAll('.ant-drawer-open').length;
+    return `${document.location.href}|${modals}|${total}|${firstH}|${drawers}`;
   });
   return createHash("sha256").update(sig).digest("hex");
 }
 
 async function dismissOverlay(page) {
   await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(300);
-  const closeSelectors = [
-    '[aria-label="Close"]', '.ant-modal-close',
-    '[class*="close" i][role="button"]',
-  ];
-  for (const s of closeSelectors) {
+  await page.waitForTimeout(500);
+  for (const s of [
+    '[aria-label="Close"]', '.ant-modal-close', '.ant-drawer-close',
+    '[class*="close" i][role="button"]', 'button:has-text("Cancel")',
+  ]) {
     const loc = page.locator(s).first();
     if (await loc.count() && await loc.isVisible().catch(() => false)) {
       await loc.click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(400);
       break;
     }
   }
