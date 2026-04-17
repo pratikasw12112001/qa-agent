@@ -39,6 +39,14 @@ export function extractFileKey(url) {
   return m[1];
 }
 
+/** Extract page-id from a Figma URL if present (e.g. ?page-id=123%3A456 or &page-id=123-456) */
+export function extractPageId(url) {
+  const m = url.match(/[?&]page-id=([^&]+)/);
+  if (!m) return null;
+  // page-id may be URL-encoded (123%3A456) or dash-separated (123-456)
+  return decodeURIComponent(m[1]).replace(/-/, ":");
+}
+
 // ── Rate-limit-aware Figma fetch ─────────────────────────────────────────────
 
 async function figmaFetch(url, token) {
@@ -134,15 +142,22 @@ async function writeGhPagesCache(fileKey, data) {
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export async function fetchFrames(figmaUrl, token) {
-  const fileKey = extractFileKey(figmaUrl);
+  const fileKey    = extractFileKey(figmaUrl);
+  const pageIdFilter = extractPageId(figmaUrl);   // null = all design pages
+  if (pageIdFilter) {
+    console.log(`   Scoping to page-id: ${pageIdFilter} (from URL)`);
+  }
+
+  // Cache key includes page scope so different pages don't collide
+  const cacheKey = pageIdFilter ? `${fileKey}--${pageIdFilter.replace(/:/g, "_")}` : fileKey;
 
   // 1. Check gh-pages persistent cache first
-  const ghCache = await readGhPagesCache(fileKey);
+  const ghCache = await readGhPagesCache(cacheKey);
   if (ghCache?.frames) return { fileKey, frames: ghCache.frames, flowStartingPoints: ghCache.flowStartingPoints ?? [] };
 
   // 2. Check local disk cache (CI: always miss; local dev: useful)
   if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
-  const localCache = join(CACHE_DIR, `${fileKey}.json`);
+  const localCache = join(CACHE_DIR, `${cacheKey}.json`);
   if (existsSync(localCache)) {
     const mtime = statSync(localCache).mtimeMs;
     if (Date.now() - mtime < CACHE_TTL_MS) {
@@ -164,7 +179,12 @@ export async function fetchFrames(figmaUrl, token) {
   const flowStartingPoints  = [];   // prototype flow entry frames
 
   for (const page of stage1Data.document.children ?? []) {
-    if (SKIP_PAGE_RE.test(page.name.trim())) {
+    // If the URL scopes to a specific page, skip all others
+    if (pageIdFilter && page.id !== pageIdFilter) {
+      console.log(`   Skipping page "${page.name}" (not the scoped page)`);
+      continue;
+    }
+    if (!pageIdFilter && SKIP_PAGE_RE.test(page.name.trim())) {
       console.log(`   Skipping non-design page: "${page.name}"`);
       continue;
     }
@@ -197,7 +217,7 @@ export async function fetchFrames(figmaUrl, token) {
   if (candidateIds.length === 0) {
     const result = { fileKey, frames: [] };
     writeFileSync(localCache, JSON.stringify(result));
-    await writeGhPagesCache(fileKey, result);
+    await writeGhPagesCache(cacheKey, result);
     return result;
   }
 
@@ -232,7 +252,7 @@ export async function fetchFrames(figmaUrl, token) {
 
   const result = { fileKey, frames, flowStartingPoints };
   writeFileSync(localCache, JSON.stringify(result));
-  await writeGhPagesCache(fileKey, result);
+  await writeGhPagesCache(cacheKey, result);
   console.log(`   Extracted ${frames.length} frames · ${flowStartingPoints.length} prototype flow(s)`);
   return result;
 }
