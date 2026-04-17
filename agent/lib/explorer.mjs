@@ -109,8 +109,9 @@ export async function exploreStates({
       continue;
     }
 
-    // ── Reveal hover-only row action buttons (3-dot menus, edit icons) ────────
-    // Ant Design hides action buttons until hover via CSS; force them visible
+    // ── Reveal hover-only row action buttons ─────────────────────────────────
+    // Ant Design (and many other frameworks) hide per-row action buttons via CSS
+    // until the user hovers. Force them visible so the selector scan can find them.
     await page.addStyleTag({
       content: `
         .ant-table-row td .ant-btn, .ant-table-row td .ant-space .ant-btn,
@@ -238,7 +239,7 @@ async function collectClickables(page) {
       // Inputs that open pickers
       'input[type="button"]',
       'input[type="submit"]',
-      // Row action buttons (3-dot menu, edit, configure, pin, delete)
+      // Row action buttons (icon-only or text buttons inside table cells)
       'td .ant-btn',
       'td .ant-dropdown-trigger',
       '.ant-table-cell .ant-btn',

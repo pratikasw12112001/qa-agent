@@ -174,7 +174,7 @@ function structureSimilarity(a, b) {
   return sum / keys.length;
 }
 
-/** Boost score when frame name words appear in the live URL (e.g. "logbook" in both). */
+/** Boost score when words in the live URL path appear in the Figma frame name. */
 function urlNameBonus(stateUrl, frameName) {
   const urlWords  = (stateUrl  || "").toLowerCase().replace(/[^a-z0-9]/g, " ").split(/\s+/).filter((w) => w.length > 2);
   const nameWords = (frameName || "").toLowerCase().replace(/[^a-z0-9]/g, " ").split(/\s+/).filter((w) => w.length > 2);
