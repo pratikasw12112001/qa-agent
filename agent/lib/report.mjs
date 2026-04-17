@@ -188,13 +188,16 @@ export function generateReport({
         <div class="label">Quality score</div>
         <div class="big" style="color:${scoreColor(score.value)}">${score.value}${score.noData ? "" : " / 100"}</div>
       </div>
-      <div>
+      <div style="flex:1">
         <div class="chips">
           <span class="chip err">${score.errors} errors</span>
           <span class="chip warn">${score.warns} warnings</span>
           <span class="chip info">${matches.filter(m => m.status === "matched").length} matched</span>
           <span class="chip info">${matches.filter(m => m.status === "review").length} review</span>
           <span class="chip info">${matches.filter(m => m.status === "unmatched").length} unmatched</span>
+        </div>
+        <div style="margin-top:10px;font-size:13px;color:#94a3b8;line-height:1.6;max-width:560px">
+          ${scoreExplanation(score, states.length, matches, frameAnalyses)}
         </div>
       </div>
     </div>
@@ -343,6 +346,31 @@ function scoreColor(v) {
   return "#ef4444";
 }
 
+function scoreExplanation(score, stateCount, matches, frameAnalyses) {
+  if (score.noData) return "Not enough data to compute a score — no findings or functional checks were produced.";
+  const matched   = matches.filter((m) => m.status === "matched").length;
+  const unmatched = matches.filter((m) => m.status === "unmatched").length;
+  const avgFrame  = frameAnalyses.length
+    ? Math.round(frameAnalyses.reduce((a, fa) => a + (fa.frameScore ?? 0), 0) / frameAnalyses.length)
+    : null;
+
+  const parts = [];
+
+  if (score.value >= 85)      parts.push("The implementation closely matches the Figma designs with only minor deviations.");
+  else if (score.value >= 65) parts.push("The implementation is generally aligned but has notable gaps that need attention.");
+  else                        parts.push("Significant deviations from the Figma designs were found — review recommended before release.");
+
+  parts.push(`${stateCount} unique screen state${stateCount !== 1 ? "s" : ""} were explored.`);
+
+  if (matched > 0)   parts.push(`${matched} state${matched !== 1 ? "s" : ""} were confidently matched to Figma frames.`);
+  if (unmatched > 0) parts.push(`${unmatched} state${unmatched !== 1 ? "s" : ""} had no matching Figma frame — these screens may be missing from the design file or outside the scoped canvas.`);
+  if (score.errors)  parts.push(`${score.errors} critical error${score.errors !== 1 ? "s" : ""} require immediate attention.`);
+  if (score.warns)   parts.push(`${score.warns} warning${score.warns !== 1 ? "s" : ""} should be reviewed.`);
+  if (avgFrame !== null) parts.push(`Average frame fidelity score: ${avgFrame}/100.`);
+
+  return parts.join(" ");
+}
+
 function renderTopIssues(findings) {
   const top = findings.filter((f) => f.severity === "error").slice(0, 5);
   if (top.length === 0) return `<p style="color:var(--muted);font-size:13px;margin-top:14px">No critical issues found.</p>`;
@@ -432,7 +460,9 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
       </div>`).join("") :
       `<p style="color:var(--muted);font-size:13px;margin:0">No visual/content issues detected.</p>`;
 
-    const summary = fa?.summary ? `<div style="font-size:12px;color:#94a3b8;font-style:italic;margin-top:3px">"${escapeHtml(fa.summary)}"</div>` : "";
+    const summary = fa?.summary
+      ? `<div style="font-size:12px;color:#cbd5e1;margin-top:5px;line-height:1.5;border-left:2px solid #3b82f6;padding-left:8px">${escapeHtml(fa.summary)}</div>`
+      : "";
 
     return `
     <div class="fc">
@@ -553,15 +583,21 @@ function renderDimGrid(fa) {
     ).join("");
     return `
       <div class="fa-dim-card">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
           <div>
             <div style="font-weight:700;font-size:13px">${escapeHtml(meta.label)}</div>
             <span class="status-badge ${sc}" style="margin-top:4px;display:inline-block">${escapeHtml(d.status)}</span>
           </div>
-          <div style="font-size:24px;font-weight:900;color:${dc};line-height:1">${d.score}</div>
+          <div style="text-align:right;flex-shrink:0;margin-left:8px">
+            <div style="font-size:28px;font-weight:900;color:${dc};line-height:1">${d.score}</div>
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">/ 100</div>
+          </div>
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${escapeHtml(d.notes)}</div>
-        ${issues ? `<ul style="margin:0;padding:0 0 0 12px">${issues}</ul>` : ""}
+        ${d.notes && d.notes !== "—" ? `
+        <div style="font-size:12px;color:#e2e8f0;line-height:1.55;margin-bottom:8px;padding:8px;background:rgba(59,130,246,.07);border-radius:6px;border-left:2px solid ${dc}">
+          ${escapeHtml(d.notes)}
+        </div>` : ""}
+        ${issues ? `<ul style="margin:0;padding:0 0 0 14px;list-style:disc">${issues}</ul>` : ""}
       </div>`;
   }).join("");
   return `<div class="fa-dim-grid">${cards}</div>`;
@@ -603,18 +639,29 @@ function renderCombinedAssessment(frameAnalyses) {
     insights.push("All analyzed dimensions are consistent with the Figma design — great job!");
 
   // Dimension summary bar
+  // Collect representative notes per dimension (pick note from lowest-scoring frame for that dim)
+  const dimNotes = {};
+  for (const key of Object.keys(DIM_META)) {
+    const worst = frameAnalyses
+      .filter((fa) => fa.analysis?.dimensions?.[key]?.notes && fa.analysis.dimensions[key].notes !== "—")
+      .sort((a, b) => (a.analysis.dimensions[key].score ?? 100) - (b.analysis.dimensions[key].score ?? 100))[0];
+    dimNotes[key] = worst?.analysis?.dimensions?.[key]?.notes ?? null;
+  }
+
   const dimSummary = Object.entries(DIM_META).map(([key, meta]) => {
     const s  = dimAvgs[key];
     const c  = s >= 75 ? "#22c55e" : s >= 50 ? "#eab308" : "#ef4444";
+    const note = dimNotes[key];
     return `
-      <div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:600">
           <span>${escapeHtml(meta.label)}</span>
-          <span style="font-weight:700;color:${c}">${s}/100</span>
+          <span style="font-weight:800;color:${c}">${s}/100</span>
         </div>
-        <div style="background:#1a2235;border-radius:4px;height:6px">
+        <div style="background:#1a2235;border-radius:4px;height:6px;margin-bottom:6px">
           <div style="background:${c};height:6px;border-radius:4px;width:${s}%"></div>
         </div>
+        ${note ? `<div style="font-size:12px;color:#94a3b8;line-height:1.5;padding-left:4px">${escapeHtml(note)}</div>` : ""}
       </div>`;
   }).join("");
 
@@ -654,7 +701,10 @@ function renderCombinedAssessment(frameAnalyses) {
       <div class="combined-score">
         <div class="big-score" style="color:${color}">${avg}</div>
         <div class="label">Overall Score</div>
-        <div style="font-size:12px;color:var(--dim);margin-top:4px">${frameAnalyses.length} frame(s)</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:4px">${frameAnalyses.length} frame(s) averaged</div>
+        <div style="font-size:12px;margin-top:10px;color:${color};font-weight:600">
+          ${avg >= 85 ? "✓ Solid" : avg >= 65 ? "△ Needs review" : "✗ Significant gaps"}
+        </div>
       </div>
       <div style="flex:1">
         <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;
