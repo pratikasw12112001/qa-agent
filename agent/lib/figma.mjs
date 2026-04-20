@@ -403,25 +403,54 @@ function extractFigmaStyles(frameNode) {
 
   const nameLower = (n) => (n.name || "").toLowerCase();
 
+  // Pass 1: name-heuristic walk (text nodes, named components)
   walk(frameNode, (n) => {
-    const name = nameLower(n);
+    const name   = nameLower(n);
     const isButton  = name.includes("button") || name.includes("btn") || name.includes("cta");
     const isHeading = name.includes("heading") || name.includes("title") || name.includes("header");
-    const isInput   = name.includes("input") || name.includes("field") || name.includes("textfield");
+    const isInput   = name.includes("input")   || name.includes("field") || name.includes("textfield");
     const isText    = n.type === "TEXT";
 
     const styles = nodeStyles(n);
     if (!Object.keys(styles).length) return;
 
-    if (isButton && result.buttons.length < 3) {
-      result.buttons.push({ label: n.name, styles });
-    } else if (isHeading && result.headings.length < 2) {
-      result.headings.push({ label: n.name, styles });
-    } else if (isInput && result.inputs.length < 2) {
-      result.inputs.push({ label: n.name, styles });
-    } else if (isText && result.bodyText.length < 1 && n.style?.fontSize && n.style.fontSize < 16) {
+    if (isButton  && result.buttons.length  < 3) result.buttons.push ({ label: n.name, styles });
+    else if (isHeading && result.headings.length < 2) result.headings.push({ label: n.name, styles });
+    else if (isInput   && result.inputs.length   < 2) result.inputs.push  ({ label: n.name, styles });
+    else if (isText && result.bodyText.length < 1 && n.style?.fontSize && n.style.fontSize < 16)
       result.bodyText.push({ label: (n.characters || n.name || "").slice(0, 30), styles });
-    }
+  });
+
+  // Pass 2: INSTANCE / COMPONENT nodes — where real design tokens live.
+  // These are named things like "Primary/Large/Default", "Form field/Text",
+  // so name heuristics miss them. Detect by structure instead:
+  //   button:  has padding + cornerRadius + a solid fill + a TEXT child
+  //   input:   has strokeWeight > 0 + a TEXT child with placeholder-style text
+  //   heading: TEXT child with fontSize >= 20
+  walk(frameNode, (n) => {
+    if (n.type !== "INSTANCE" && n.type !== "COMPONENT") return;
+
+    const baseStyles = nodeStyles(n);
+
+    // Merge in TEXT child typography (most specific — actual font tokens)
+    const textChild = (n.children ?? []).find(c => c.type === "TEXT" && c.style?.fontSize);
+    if (textChild) Object.assign(baseStyles, nodeStyles(textChild));
+
+    if (!Object.keys(baseStyles).length) return;
+
+    const hasPadding  = n.paddingTop != null && n.paddingTop >= 0;
+    const hasRadius   = (n.cornerRadius ?? 0) > 0;
+    const hasFill     = (n.fills ?? []).some(f => f.type === "SOLID" && f.visible !== false);
+    const hasStroke   = (n.strokeWeight ?? 0) > 0;
+    const textFontSz  = textChild?.style?.fontSize ?? 0;
+
+    const looksLikeButton  = hasPadding && hasRadius && hasFill;
+    const looksLikeInput   = hasStroke && hasPadding && !hasRadius;
+    const looksLikeHeading = textFontSz >= 20;
+
+    if      (looksLikeButton  && result.buttons.length  < 3) result.buttons.push ({ label: n.name, styles: baseStyles });
+    else if (looksLikeInput   && result.inputs.length   < 2) result.inputs.push  ({ label: n.name, styles: baseStyles });
+    else if (looksLikeHeading && result.headings.length < 2) result.headings.push({ label: n.name, styles: baseStyles });
   });
 
   return result;
@@ -430,12 +459,22 @@ function extractFigmaStyles(frameNode) {
 function extractInteractions(frameNode, acc = []) {
   walk(frameNode, (n) => {
     if (!n.reactions?.length) return;
+
+    // Collect visible text label from direct TEXT children — this is what the
+    // user actually sees on the button/element (e.g. "Create new Logbook")
+    const fromNodeLabel = (n.children ?? [])
+      .filter(c => c.type === "TEXT" && c.characters?.trim())
+      .map(c => c.characters.trim())
+      .join(" ")
+      .trim() || null;
+
     for (const r of n.reactions) {
       if (r.action?.type === "NODE" && r.action.destinationId) {
         acc.push({
-          fromNodeName: n.name,
-          toFrameId:    r.action.destinationId,
-          trigger:      r.trigger?.type ?? "ON_CLICK",
+          fromNodeName:  n.name,
+          fromNodeLabel,          // visible button text — used for trigger matching
+          toFrameId:     r.action.destinationId,
+          trigger:       r.trigger?.type ?? "ON_CLICK",
         });
       }
     }

@@ -395,13 +395,15 @@ async function captureState(page, meta) {
   // Wait briefly for any pending renders
   await page.waitForTimeout(400);
   // JPEG at 75% quality keeps screenshots small (target ~100KB vs ~1MB PNG)
-  const screenshot  = await page.screenshot({ fullPage: false, type: "jpeg", quality: 75 });
-  const dom         = await page.evaluate(extractDom);
-  const cssProps    = await page.evaluate(extractCssProperties);
+  const screenshot     = await page.screenshot({ fullPage: false, type: "jpeg", quality: 75 });
+  const dom            = await page.evaluate(extractDom);
+  const cssProps       = await page.evaluate(extractCssProperties);
+  const croppedRegions = await captureKeyRegions(page);
   const hash = createHash("sha256")
     .update(meta.url)
     .update(dom.texts.join("|").slice(0, 4000))
     .update(JSON.stringify(dom.structure))
+    .update((meta.entryClicks || []).map(e => e.text).join(">"))
     .digest("hex");
   return {
     id: meta.id, parent: meta.parent, triggerDesc: meta.triggerDesc,
@@ -413,6 +415,7 @@ async function captureState(page, meta) {
     textContent: dom.texts,
     structure: dom.structure,
     cssProperties: cssProps,
+    croppedRegions,
     hash,
   };
 }
@@ -435,6 +438,71 @@ function extractDom() {
     total:    document.querySelectorAll("*").length,
   };
   return { texts: Array.from(new Set(texts)).slice(0, 400), structure };
+}
+
+/**
+ * Captures cropped screenshots of the 2 most important UI regions:
+ * (1) header/title area, (2) primary button or first form row.
+ * Used by compare.mjs for focused vision analysis at 5-10x zoom.
+ */
+async function captureKeyRegions(page) {
+  const clips = await page.evaluate(() => {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const regions = [];
+
+    // Region 1: heading / page title (top area, first visible h1/h2/header)
+    const heading = document.querySelector(
+      "h1, h2, .ant-page-header-heading-title, [class*='page-title' i], [class*='heading' i]"
+    );
+    if (heading) {
+      const r = heading.getBoundingClientRect();
+      if (r.width > 50 && r.height > 8 && r.top >= 0 && r.top < H) {
+        regions.push({
+          label: "header",
+          x: 0,
+          y: Math.max(0, r.top - 24),
+          width: W,
+          height: Math.min(220, r.height + 80),
+        });
+      }
+    }
+
+    // Region 2: primary CTA button or first visible form group
+    const cta =
+      document.querySelector(".ant-btn-primary:not([disabled])") ||
+      document.querySelector("button[type='submit']:not([disabled])") ||
+      document.querySelector(".ant-form-item");
+    if (cta) {
+      const r = cta.getBoundingClientRect();
+      if (r.width > 40 && r.height > 16 && r.top >= 0 && r.top < H) {
+        const pad = 40;
+        regions.push({
+          label: "primary-action",
+          x: Math.max(0, r.left - pad),
+          y: Math.max(0, r.top - pad),
+          width:  Math.min(W, r.width  + pad * 2),
+          height: Math.min(H, r.height + pad * 2),
+        });
+      }
+    }
+
+    return regions.slice(0, 2);
+  });
+
+  const results = [];
+  for (const clip of clips) {
+    try {
+      const w = Math.max(clip.width,  10);
+      const h = Math.max(clip.height, 10);
+      const buf = await page.screenshot({
+        clip: { x: clip.x, y: clip.y, width: w, height: h },
+        type: "jpeg", quality: 88,
+      });
+      results.push({ label: clip.label, screenshot: buf.toString("base64") });
+    } catch { /* clip may fail if element scrolled out — skip */ }
+  }
+  return results;
 }
 
 /**

@@ -237,18 +237,33 @@ function buildProtoBonuses(state, states, matchedMap, frames) {
   if (!triggerNorm) return bonuses;
 
   for (const interaction of parentFrame.interactions) {
-    const elementNorm = (interaction.fromNodeName || "").toLowerCase().trim();
-    if (!elementNorm) continue;
+    // Skip non-click triggers — explorer only fires clicks
+    if (interaction.trigger && interaction.trigger !== "ON_CLICK") continue;
 
-    // Fuzzy overlap: trigger contains element name OR element name contains trigger
-    const overlap =
-      triggerNorm.includes(elementNorm) ||
-      elementNorm.includes(triggerNorm) ||
-      tokenOverlap(triggerNorm, elementNorm) >= 0.5;
+    const namNorm   = (interaction.fromNodeName  || "").toLowerCase().trim();
+    const labelNorm = (interaction.fromNodeLabel || "").toLowerCase().trim();
 
-    if (overlap) {
+    // Match trigger against BOTH layer name AND visible text label.
+    // fromNodeLabel (e.g. "Create new Logbook") matches live trigger far better
+    // than fromNodeName (e.g. "Button/Primary/Default").
+    const matchesName =
+      namNorm && (
+        triggerNorm.includes(namNorm) ||
+        namNorm.includes(triggerNorm) ||
+        tokenOverlap(triggerNorm, namNorm) >= 0.5
+      );
+
+    const matchesLabel =
+      labelNorm && (
+        triggerNorm.includes(labelNorm) ||
+        labelNorm.includes(triggerNorm) ||
+        tokenOverlap(triggerNorm, labelNorm) >= 0.5
+      );
+
+    if (matchesName || matchesLabel) {
       bonuses.set(interaction.toFrameId, 0.5);
-      console.log(`   → prototype bonus: "${state.triggerDesc}" → frame ${interaction.toFrameId} (+0.5)`);
+      const via = matchesLabel ? `label "${interaction.fromNodeLabel}"` : `name "${interaction.fromNodeName}"`;
+      console.log(`   → prototype bonus: "${state.triggerDesc}" → frame ${interaction.toFrameId} (+0.5) via ${via}`);
     }
   }
   return bonuses;

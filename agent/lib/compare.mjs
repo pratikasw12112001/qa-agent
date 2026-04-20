@@ -42,7 +42,7 @@ export async function compareStateToFrame({ state, match, frame }) {
   // 1b. CSS property comparison (deterministic, no AI call)
   findings.push(...cssComparison(state.cssProperties, frame.figmaStyles));
 
-  // 2. Deep 7-dimension AI analysis (one vision call)
+  // 2. Deep 7-dimension AI analysis (one vision call — full screen)
   if (match.framePng) {
     analysis = await visionAnalysis(state.screenshot, match.framePng, frame.name);
   } else {
@@ -63,6 +63,14 @@ export async function compareStateToFrame({ state, match, frame }) {
           evidence: frame.name,
         });
       }
+    }
+  }
+
+  // 3. Focused cropped-region vision (up to 2 crops — catches typography & spacing at 5-10x zoom)
+  if (match.framePng && state.croppedRegions?.length) {
+    const focusedIssues = await focusedRegionVision(state.croppedRegions, match.framePng, frame.name);
+    for (const issue of focusedIssues) {
+      findings.push({ category: "focused-vision", severity: "warn", description: issue, evidence: frame.name });
     }
   }
 
@@ -92,12 +100,11 @@ function cssComparison(liveCss, figmaStyles) {
     const figmaItems = figmaStyles[key] ?? [];
     if (!liveItems.length || !figmaItems.length) continue;
 
-    // Match by index (first live ↔ first figma, etc.)
-    const pairs = Math.min(liveItems.length, figmaItems.length);
-    for (let i = 0; i < pairs; i++) {
-      const live  = liveItems[i];
-      const figma = figmaItems[i];
-      const elLabel = live.label || figma.label || `${label} ${i+1}`;
+    // Best-match pairing by label token overlap — avoids mis-pairing
+    // "Cancel" button (live) with "Submit CTA" (figma)
+    const pairs = bestMatchPairs(liveItems, figmaItems);
+    for (const { live, figma } of pairs) {
+      const elLabel = live.label || figma.label || label;
       const diffs = diffStyles(live.styles, figma.styles);
       for (const d of diffs) {
         findings.push({
@@ -181,29 +188,145 @@ function diffStyles(live, figma) {
   return diffs;
 }
 
-/** Parse hex or rgb(a) color to {r,g,b} 0-255 */
+// ─── Label-based pairing ──────────────────────────────────────────────────────
+/**
+ * For each live element, find the best-matching figma element by label token
+ * overlap. Avoids mis-pairing "Cancel" (live) with "Submit CTA" (figma).
+ * Unmatched elements are skipped rather than force-paired.
+ */
+function bestMatchPairs(liveItems, figmaItems) {
+  const pairs = [];
+  const usedFigmaIdx = new Set();
+
+  for (const live of liveItems) {
+    const liveToks = labelTokens(live.label || "");
+    let bestScore = -1;
+    let bestIdx   = -1;
+
+    for (let j = 0; j < figmaItems.length; j++) {
+      if (usedFigmaIdx.has(j)) continue;
+      const figToks = labelTokens(figmaItems[j].label || "");
+      const score   = labelOverlap(liveToks, figToks);
+      if (score > bestScore) { bestScore = score; bestIdx = j; }
+    }
+
+    // Accept if: some token overlap, OR only one figma item (no choice), OR
+    // live label is empty (unlabelled element — pair with first available figma)
+    const accept = bestIdx >= 0 && (
+      bestScore > 0 ||
+      figmaItems.length === 1 ||
+      !live.label
+    );
+
+    if (accept) {
+      pairs.push({ live, figma: figmaItems[bestIdx] });
+      usedFigmaIdx.add(bestIdx);
+    }
+  }
+  return pairs;
+}
+
+function labelTokens(s) {
+  return new Set(
+    s.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(w => w.length > 1)
+  );
+}
+
+function labelOverlap(setA, setB) {
+  if (!setA.size || !setB.size) return 0;
+  let hits = 0;
+  for (const w of setA) if (setB.has(w)) hits++;
+  return hits / Math.max(setA.size, setB.size);
+}
+
+// ─── Focused cropped-region vision ────────────────────────────────────────────
+/**
+ * Runs a second, targeted vision call using cropped live regions (header,
+ * primary-action area) vs the full Figma frame. The 5-10x zoom makes font
+ * sizes, padding, and spacing deviations visible to the model.
+ * Returns an array of issue description strings (max 4 total).
+ */
+async function focusedRegionVision(croppedRegions, figmaB64, frameName) {
+  if (!croppedRegions?.length) return [];
+  const regionLabels = croppedRegions.map(r => r.label).join(" and ");
+  const system =
+    "You are a pixel-level UI QA engineer. You are given cropped live-app regions and the full Figma design frame. " +
+    "Find specific visual deviations that a full-screen comparison would miss. Be precise with measurements.";
+  const user =
+    `Carefully compare the CROPPED LIVE regions (${regionLabels}) against the FIGMA frame "${frameName}". ` +
+    `Focus on: font-size differences, wrong padding/spacing, wrong colors, wrong border-radius, wrong font-weight. ` +
+    `Ignore dynamic data (names, dates, counts). ` +
+    `Reply JSON only: { "issues": ["<specific issue with exact values e.g. button padding is 8px live vs 12px Figma>"] }. Max 4 issues.`;
+
+  const images = [
+    ...croppedRegions.map(r => ({ label: `LIVE_${r.label.replace(/-/g, "_").toUpperCase()}`, base64: r.screenshot })),
+    { label: "FIGMA_FULL", base64: figmaB64 },
+  ];
+
+  try {
+    const raw = await askVision(system, user, images, { json: true });
+    const j   = parseJsonLoose(raw);
+    return Array.isArray(j?.issues) ? j.issues.slice(0, 4) : [];
+  } catch {
+    return [];
+  }
+}
+
+// ─── Alpha-aware color helpers ────────────────────────────────────────────────
+/**
+ * Parse hex or rgb(a) color to {r, g, b, a} where a ∈ [0,1].
+ * Returns null for fully transparent colors (a < 0.05) — no useful signal.
+ */
 function normalizeColor(c) {
-  if (!c || c === "transparent" || c === "rgba(0, 0, 0, 0)") return null;
-  // rgb(r,g,b) or rgba(r,g,b,a)
-  const rgb = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (rgb) return { r: +rgb[1], g: +rgb[2], b: +rgb[3] };
-  // #rrggbb or #rgb
+  if (!c || c === "transparent") return null;
+
+  // rgba(r,g,b,a)
+  const rgba = c.match(/rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\s*\)/);
+  if (rgba) {
+    const a = parseFloat(rgba[4]);
+    if (a < 0.05) return null;   // fully transparent — skip
+    return { r: +rgba[1], g: +rgba[2], b: +rgba[3], a };
+  }
+  // rgb(r,g,b)
+  const rgb = c.match(/rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)/);
+  if (rgb) return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: 1 };
+
+  // #rrggbbaa
+  const hex8 = c.match(/^#([0-9a-f]{8})/i);
+  if (hex8) {
+    const h = hex8[1];
+    const a = parseInt(h.slice(6, 8), 16) / 255;
+    if (a < 0.05) return null;
+    return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16), a };
+  }
+  // #rrggbb
   const hex6 = c.match(/^#([0-9a-f]{6})/i);
   if (hex6) {
     const h = hex6[1];
-    return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+    return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16), a: 1 };
   }
+  // #rgb
   const hex3 = c.match(/^#([0-9a-f]{3})/i);
   if (hex3) {
     const h = hex3[1];
-    return { r: parseInt(h[0]+h[0],16), g: parseInt(h[1]+h[1],16), b: parseInt(h[2]+h[2],16) };
+    return { r: parseInt(h[0]+h[0],16), g: parseInt(h[1]+h[1],16), b: parseInt(h[2]+h[2],16), a: 1 };
   }
   return null;
 }
 
-/** Returns true if two RGB colors are within `threshold` Euclidean distance */
-function colorsClose({ r: r1, g: g1, b: b1 }, { r: r2, g: g2, b: b2 }, threshold) {
-  return Math.sqrt((r1-r2)**2 + (g1-g2)**2 + (b1-b2)**2) <= threshold;
+/**
+ * Returns true if two RGBA colors are perceptually the same.
+ * RGB Euclidean distance must be within `threshold`.
+ * Alpha difference > 0.15 is treated as a meaningful intent difference.
+ */
+function colorsClose(c1, c2, threshold) {
+  const rgbDist = Math.sqrt((c1.r-c2.r)**2 + (c1.g-c2.g)**2 + (c1.b-c2.b)**2);
+  if (rgbDist > threshold) return false;
+  const alphaDiff = Math.abs((c1.a ?? 1) - (c2.a ?? 1));
+  return alphaDiff <= 0.15;   // same RGB but very different opacity = different intent
 }
 
 // ─── presence checks (lenient) ───────────────────────────────────────────────

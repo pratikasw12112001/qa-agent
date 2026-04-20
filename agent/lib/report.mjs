@@ -163,7 +163,7 @@ ${warnings.length ? `
     <div class="chips" style="margin-top:10px">
       ${nonCssFindings.filter(f=>f.severity==="error").length ? `<span class="chip e">${nonCssFindings.filter(f=>f.severity==="error").length} error${nonCssFindings.filter(f=>f.severity==="error").length>1?"s":""}</span>` : ""}
       ${nonCssFindings.filter(f=>f.severity==="warn").length  ? `<span class="chip w">${nonCssFindings.filter(f=>f.severity==="warn").length} warning${nonCssFindings.filter(f=>f.severity==="warn").length>1?"s":""}</span>`  : ""}
-      ${findings.filter(f=>f.category==="css").length ? `<span class="chip i">${findings.filter(f=>f.category==="css").length} CSS deviation${findings.filter(f=>f.category==="css").length>1?"s":""}</span>` : ""}
+      ${findings.filter(f=>f.category==="css"||f.category==="focused-vision").length ? `<span class="chip i">${findings.filter(f=>f.category==="css"||f.category==="focused-vision").length} CSS deviation${findings.filter(f=>f.category==="css"||f.category==="focused-vision").length>1?"s":""}</span>` : ""}
       <span class="chip g">${matched.length + review.length} frame${matched.length+review.length!==1?"s":""} compared</span>
       ${unmatched.length ? `<span class="chip i">${unmatched.length} unmatched</span>` : ""}
       <span class="chip i">${states.length} states explored</span>
@@ -405,8 +405,8 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
     const tabDimensions = fa ? `<div class="dim-row">${dimPills}</div>${dimDetail}` :
       `<p style="color:var(--muted);font-size:13px">No analysis available.</p>`;
 
-    // TAB 3 — CSS Deviations
-    const cssFindings = findings.filter(f => f.category === "css");
+    // TAB 3 — CSS Deviations (deterministic diff + focused-region vision)
+    const cssFindings = findings.filter(f => f.category === "css" || f.category === "focused-vision");
     const tabCss = cssFindings.length ? `
       <div style="margin-bottom:8px;font-size:12px;color:var(--muted)">
         Computed CSS vs Figma design tokens — major params only (font-size, padding, color, border-radius)
