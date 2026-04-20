@@ -73,9 +73,11 @@ export async function exploreStates({
   const prdScreens  = (prdHints.screens || []).map((s) => s.toLowerCase());
   if (prdActions.length) console.log(`   PRD hints: ${prdActions.length} action(s), ${prdScreens.length} screen(s) — will prioritize matching elements`);
 
-  const states      = [];
-  const seenHashes  = new Set();
-  const clickedKeys = new Set();  // global dedup of (stateKey, elementText) pairs
+  const states           = [];
+  const seenHashes       = new Set();
+  const clickedKeys      = new Set();  // global dedup of (stateKey, elementText) pairs
+  const agentCreatedUrls = new Set();  // URLs the agent navigated to after a form submit
+                                       // Edit flows are only attempted on these URLs
 
   // ── Capture root state ───────────────────────────────────────────────────
   const root = await captureState(page, {
@@ -238,7 +240,7 @@ export async function exploreStates({
           console.log(`     + ${newState.id} via click "${truncate(el.text, 40)}" (${urlChanged ? "nav" : "overlay → will explore inside"})`);
         }
 
-        // ── Form interaction: if this state has a form, fill and submit ──────
+        // ── Form interaction: fill + submit, then attempt edit on created entity ──
         if (states.length < maxStates && depth + 1 < maxDepth) {
           try {
             const formResult = await tryFormFill(page);
@@ -248,6 +250,12 @@ export async function exploreStates({
                 await page.waitForTimeout(800);
                 const formUrl  = page.url();
                 const formHash = await domHash(page);
+
+                // Track URL produced by this form submit — this is the agent-created entity.
+                // We only attempt edit flows on URLs the agent itself navigated to after creating,
+                // never on pre-existing rows (to avoid corrupting other users' data).
+                if (formUrl !== afterUrl) agentCreatedUrls.add(formUrl);
+
                 if (!seenHashes.has(formHash)) {
                   const formState = await captureState(page, {
                     id: `s${stateCounter++}`, parent: newState.id,
@@ -261,6 +269,34 @@ export async function exploreStates({
                   seenHashes.add(formState.hash);
                   queue.push({ stateId: formState.id, depth: depth + 2 });
                   console.log(`     + ${formState.id} form submitted → ${formUrl}`);
+
+                  // ── Edit flow: try to find and click an Edit button on the
+                  // page we just landed on (the agent-created entity page).
+                  // We ONLY do this when we navigated to a new URL after submit,
+                  // ensuring we never touch pre-existing data owned by other users.
+                  if (states.length < maxStates && formUrl !== afterUrl && depth + 3 < maxDepth) {
+                    try {
+                      const editLoc = await findEditButton(page);
+                      if (editLoc) {
+                        await editLoc.scrollIntoViewIfNeeded().catch(() => {});
+                        await editLoc.click({ timeout: 4000 });
+                        await page.waitForTimeout(waitAfterClickMs);
+                        const editHash = await domHash(page);
+                        if (!seenHashes.has(editHash)) {
+                          const editState = await captureState(page, {
+                            id: `s${stateCounter++}`, parent: formState.id,
+                            triggerDesc: `edit agent-created entity (${formResult.submitLabel})`,
+                            url: page.url(), depth: depth + 3,
+                            baseUrl: page.url(), entryClicks: [],
+                          });
+                          states.push(editState);
+                          seenHashes.add(editState.hash);
+                          queue.push({ stateId: editState.id, depth: depth + 3 });
+                          console.log(`     + ${editState.id} edit flow on agent-created entity → ${editState.url}`);
+                        }
+                      }
+                    } catch { /* edit flow is best-effort */ }
+                  }
                 }
               }
             }
@@ -600,32 +636,41 @@ function extractCssProperties() {
 
   const result = { buttons: [], headings: [], inputs: [], bodyText: [] };
 
-  // Primary / CTA buttons (limit 3)
+  // Primary / CTA buttons — must be real labeled buttons, not table row actions or icons.
+  // Order matters: more specific selectors first so we sample the most representative button.
   const btnSels = [
-    ".ant-btn-primary", "button[type='submit']",
-    ".ant-btn:not(.ant-btn-link):not(.ant-btn-text)",
-    "button:not([disabled])",
+    ".ant-btn-primary:not(.ant-btn-icon-only):not([disabled])",
+    "button[type='submit']:not([disabled])",
+    ".ant-btn:not(.ant-btn-link):not(.ant-btn-text):not(.ant-btn-icon-only):not([disabled])",
   ];
   const seenBtns = new Set();
   for (const sel of btnSels) {
     if (result.buttons.length >= 3) break;
     for (const el of document.querySelectorAll(sel)) {
       if (result.buttons.length >= 3) break;
+      // Skip buttons inside table rows — they are row-action icons, not representative CTAs
+      if (el.closest("tr, .ant-table-row, .ant-table-tbody, td, .ant-table-cell")) continue;
       const rect = el.getBoundingClientRect();
-      if (rect.width < 40 || rect.height < 20) continue;
-      const label = describeEl(el);
+      // Require minimum 72×28px — filters out icon buttons (typically 24-32px square)
+      if (rect.width < 72 || rect.height < 28) continue;
+      // Must have a real text label (not just an icon)
+      const label = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim();
+      if (!label || label.length < 2) continue;
       if (seenBtns.has(label)) continue;
       seenBtns.add(label);
-      result.buttons.push({ label, styles: getStyles(el) });
+      result.buttons.push({ label: label.slice(0, 40), styles: getStyles(el) });
     }
   }
 
-  // Headings (h1, h2 — limit 2)
+  // Headings (h1, h2 — limit 2) — must be visible and in viewport
   for (const el of document.querySelectorAll("h1, h2, .ant-page-header-heading-title")) {
     if (result.headings.length >= 2) break;
     const rect = el.getBoundingClientRect();
-    if (rect.width < 10) continue;
-    result.headings.push({ label: describeEl(el), tag: el.tagName.toLowerCase(), styles: getStyles(el) });
+    if (rect.width < 10 || rect.height < 8) continue;
+    if (rect.top < 0 || rect.top > window.innerHeight) continue;
+    const text = (el.innerText || el.textContent || "").trim();
+    if (!text) continue;
+    result.headings.push({ label: text.slice(0, 40), styles: getStyles(el) });
   }
 
   // Inputs (limit 2)
@@ -677,6 +722,32 @@ async function dismissOverlay(page) {
 }
 
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + "…" : s; }
+
+/**
+ * Finds an Edit/Modify button on the current page.
+ * Only matches buttons whose text or aria-label clearly signals an edit action.
+ * Returns a Playwright Locator, or null if nothing suitable is found.
+ */
+async function findEditButton(page) {
+  const EDIT_TEXTS = ["Edit", "Modify", "Update", "Configure", "Settings", "Edit details"];
+  for (const text of EDIT_TEXTS) {
+    for (const sel of [
+      `.ant-btn:has-text("${text}")`,
+      `button:has-text("${text}")`,
+      `[role="button"]:has-text("${text}")`,
+      `[aria-label="${text}"]`,
+    ]) {
+      try {
+        const loc = page.locator(sel).first();
+        if (await loc.count() && await loc.isVisible().catch(() => false) &&
+            !await loc.isDisabled().catch(() => true)) {
+          return loc;
+        }
+      } catch { /* try next */ }
+    }
+  }
+  return null;
+}
 
 // ─── Form interaction ─────────────────────────────────────────────────────────
 /**

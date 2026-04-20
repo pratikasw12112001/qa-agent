@@ -380,25 +380,51 @@ function extractFigmaStyles(frameNode) {
 
   function nodeStyles(n) {
     const s = {};
-    // Typography
-    if (n.style?.fontSize)    s.fontSize    = `${n.style.fontSize}px`;
-    if (n.style?.fontWeight)  s.fontWeight  = String(n.style.fontWeight);
-    if (n.style?.fontFamily)  s.fontFamily  = n.style.fontFamily;
-    if (n.style?.lineHeightPx) s.lineHeight = `${Math.round(n.style.lineHeightPx)}px`;
-    // Color (text fill)
-    const textColor = getFillColor(n.fills);
-    if (textColor) s.color = textColor;
-    // Background (frame/component fills)
-    const bgColor = n.type !== "TEXT" ? getFillColor(n.fills) : null;
-    if (bgColor) s.backgroundColor = bgColor;
-    // Padding (auto-layout)
-    if (n.paddingTop    != null) s.paddingTop    = `${n.paddingTop}px`;
-    if (n.paddingRight  != null) s.paddingRight  = `${n.paddingRight}px`;
-    if (n.paddingBottom != null) s.paddingBottom = `${n.paddingBottom}px`;
-    if (n.paddingLeft   != null) s.paddingLeft   = `${n.paddingLeft}px`;
+    // Typography (only on TEXT nodes — INSTANCE/FRAME nodes don't have .style)
+    if (n.style?.fontSize)     s.fontSize    = `${n.style.fontSize}px`;
+    if (n.style?.fontWeight)   s.fontWeight  = String(n.style.fontWeight);
+    if (n.style?.fontFamily)   s.fontFamily  = n.style.fontFamily;
+    if (n.style?.lineHeightPx) s.lineHeight  = `${Math.round(n.style.lineHeightPx)}px`;
+    // Text color — ONLY from TEXT nodes.
+    // Fills on INSTANCE/FRAME nodes are background fills, NOT text color.
+    // Setting color from a button's fill was causing wrong color values in the report.
+    if (n.type === "TEXT") {
+      const textColor = getFillColor(n.fills);
+      if (textColor) s.color = textColor;
+    }
+    // Background color — only for non-TEXT nodes (frames, instances, components)
+    if (n.type !== "TEXT") {
+      const bgColor = getFillColor(n.fills);
+      if (bgColor) s.backgroundColor = bgColor;
+    }
+    // Padding (auto-layout) — only write if the value is explicitly set (>= 0)
+    if ((n.paddingTop    ?? -1) >= 0) s.paddingTop    = `${n.paddingTop}px`;
+    if ((n.paddingRight  ?? -1) >= 0) s.paddingRight  = `${n.paddingRight}px`;
+    if ((n.paddingBottom ?? -1) >= 0) s.paddingBottom = `${n.paddingBottom}px`;
+    if ((n.paddingLeft   ?? -1) >= 0) s.paddingLeft   = `${n.paddingLeft}px`;
     // Border radius
-    if (n.cornerRadius  != null && n.cornerRadius > 0) s.borderRadius = `${n.cornerRadius}px`;
+    if ((n.cornerRadius  ?? 0) > 0) s.borderRadius = `${n.cornerRadius}px`;
     return s;
+  }
+
+  /**
+   * Recursively find the first TEXT descendant with a real label.
+   * Needed because Figma components often nest text 2-3 levels deep:
+   *   Button INSTANCE → Content FRAME → Label TEXT
+   * A direct children search misses this.
+   */
+  function findTextDescendant(node, depth = 0) {
+    if (depth > 3 || !node.children?.length) return null;
+    for (const child of node.children) {
+      if (child.type === "TEXT" && child.style?.fontSize && child.characters?.trim())
+        return child;
+    }
+    for (const child of node.children) {
+      if (child.type === "TEXT") continue;
+      const deeper = findTextDescendant(child, depth + 1);
+      if (deeper) return deeper;
+    }
+    return null;
   }
 
   const nameLower = (n) => (n.name || "").toLowerCase();
@@ -430,27 +456,35 @@ function extractFigmaStyles(frameNode) {
   walk(frameNode, (n) => {
     if (n.type !== "INSTANCE" && n.type !== "COMPONENT") return;
 
-    const baseStyles = nodeStyles(n);
+    // Use recursive search — Figma components often nest text 2-3 levels deep
+    const textDesc = findTextDescendant(n);
 
-    // Merge in TEXT child typography (most specific — actual font tokens)
-    const textChild = (n.children ?? []).find(c => c.type === "TEXT" && c.style?.fontSize);
-    if (textChild) Object.assign(baseStyles, nodeStyles(textChild));
+    const baseStyles = nodeStyles(n);
+    // Merge TEXT descendant typography — these carry the real font tokens
+    if (textDesc) Object.assign(baseStyles, nodeStyles(textDesc));
 
     if (!Object.keys(baseStyles).length) return;
 
-    const hasPadding  = n.paddingTop != null && n.paddingTop >= 0;
+    // hasPadding: require at least 4px on one side — rules out zero-padding containers
+    // (every auto-layout node has paddingTop=0 by default, which was matching everything)
+    const hasPadding  = (n.paddingTop ?? 0) >= 4 || (n.paddingLeft ?? 0) >= 8;
     const hasRadius   = (n.cornerRadius ?? 0) > 0;
     const hasFill     = (n.fills ?? []).some(f => f.type === "SOLID" && f.visible !== false);
     const hasStroke   = (n.strokeWeight ?? 0) > 0;
-    const textFontSz  = textChild?.style?.fontSize ?? 0;
+    const textFontSz  = textDesc?.style?.fontSize ?? 0;
 
-    const looksLikeButton  = hasPadding && hasRadius && hasFill;
-    const looksLikeInput   = hasStroke && hasPadding && !hasRadius;
+    // looksLikeButton: padding + radius + fill + a real text label
+    // Cards also have padding+radius+fill but their text descendants are headings, not labels
+    const looksLikeButton  = hasPadding && hasRadius && hasFill && textDesc != null
+                             && textFontSz > 0 && textFontSz <= 18;
+    // looksLikeInput: stroked + padded + has a text descendant (placeholder/label)
+    const looksLikeInput   = hasStroke && hasPadding && !hasRadius && textDesc != null;
+    // looksLikeHeading: large text descendant
     const looksLikeHeading = textFontSz >= 20;
 
-    if      (looksLikeButton  && result.buttons.length  < 3) result.buttons.push ({ label: n.name, styles: baseStyles });
-    else if (looksLikeInput   && result.inputs.length   < 2) result.inputs.push  ({ label: n.name, styles: baseStyles });
-    else if (looksLikeHeading && result.headings.length < 2) result.headings.push({ label: n.name, styles: baseStyles });
+    if      (looksLikeButton  && result.buttons.length  < 3) result.buttons.push ({ label: textDesc?.characters?.slice(0,30) || n.name, styles: baseStyles });
+    else if (looksLikeInput   && result.inputs.length   < 2) result.inputs.push  ({ label: textDesc?.characters?.slice(0,30) || n.name, styles: baseStyles });
+    else if (looksLikeHeading && result.headings.length < 2) result.headings.push({ label: textDesc?.characters?.slice(0,30) || n.name, styles: baseStyles });
   });
 
   return result;

@@ -281,7 +281,8 @@ function tokenOverlap(a, b) {
 // ─── signal functions ───────────────────────────────────────────────────────
 
 function textSimilarity(figmaTexts, liveTexts) {
-  const f = normSet(figmaTexts);
+  // Strip Figma placeholder strings before scoring — they never appear in live
+  const f = normSet((figmaTexts || []).filter(t => !isLikelyPlaceholder(t)));
   const l = normSet(liveTexts);
   if (f.size === 0 || l.size === 0) return 0;
   let inter = 0;
@@ -295,6 +296,41 @@ function normSet(arr) {
       .map((s) => String(s).toLowerCase().replace(/\s+/g, " ").trim())
       .filter((s) => s.length > 2 && s.length < 80)
   );
+}
+
+/**
+ * Returns true if the string looks like Figma placeholder / sample copy
+ * that would never appear verbatim in a live application.
+ * Filtering these out prevents near-zero text similarity scores on correct matches.
+ */
+const PLACEHOLDER_EXACT = new Set([
+  "placeholder", "subtitle", "description", "label", "title", "name",
+  "full name", "first name", "last name", "your name", "enter name",
+  "email address", "your email", "enter email", "phone number",
+  "company name", "organization", "department", "select option",
+  "click here", "type here", "enter text", "add description",
+  "untitled", "new item", "item name", "field label", "sample text",
+  "edit me", "some text", "text here", "content here",
+]);
+
+function isLikelyPlaceholder(s) {
+  if (!s) return true;
+  const t = String(s).trim();
+  // Lorem ipsum
+  if (/lorem\s+ipsum/i.test(t)) return true;
+  // Bracketed: [Name], {value}
+  if (/^\[.*\]$/.test(t) || /^\{.*\}$/.test(t)) return true;
+  // Email pattern
+  if (/@[a-z]+\.[a-z]{2,}/i.test(t)) return true;
+  // Pure numbers / timestamps / IDs: "12345", "#001", "00:00"
+  if (/^[\d\s:#\-./,]+$/.test(t) && t.length <= 20) return true;
+  // Title Case phrases of 1–3 words under 30 chars — "Full Name", "Company Name"
+  // These are almost always design-time labels, not real content
+  if (/^[A-Z][a-z]+(\s[A-Z][a-z]+){0,2}$/.test(t) && t.length <= 28) return true;
+  // Known placeholder words (exact match or as prefix/suffix)
+  const lower = t.toLowerCase();
+  if (PLACEHOLDER_EXACT.has(lower)) return true;
+  return false;
 }
 
 function structureSimilarity(a, b) {
