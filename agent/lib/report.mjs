@@ -1,317 +1,199 @@
+/**
+ * Report generator — industry-ready redesign.
+ *
+ * Layout:
+ *   L1  Sticky nav  (Summary | Screens | Checks)
+ *   L2  Hero band   (overall score · stats · 7-dim aggregate chips)
+ *   L3  Screen cards (sorted worst-first, flat — no tabs)
+ *       · Failing dims expanded with issues inline
+ *       · Passing dims collapsed to one green line
+ *       · Screenshots + CSS table as inline toggles
+ *   L4  Footer accordions (Functional · PRD · Run Info)
+ */
+
 export function generateReport({
   runId, meta, frames, states, matches, findings, frameAnalyses = [],
   functional, prdAcs, coverageGaps = { missingScreens: [], untestedActions: [] },
   aiStats, warnings = [],
 }) {
-  const now   = new Date().toISOString();
+  const now = new Date().toISOString();
 
-  const matched   = matches.filter((m) => m.status === "matched");
-  const review    = matches.filter((m) => m.status === "review");
-  const unmatched = matches.filter((m) => m.status === "unmatched");
+  // ── Aggregate stats ──────────────────────────────────────────────────────────
+  const compared   = matches.filter(m => m.status === "matched" || m.status === "review");
+  const unmatched  = matches.filter(m => m.status === "unmatched");
+  const avgScore   = frameAnalyses.length
+    ? Math.round(frameAnalyses.reduce((a, f) => a + (f.frameScore ?? 0), 0) / frameAnalyses.length)
+    : null;
+  const failingCards = frameAnalyses.filter(f => (f.frameScore ?? 100) < 60).length;
+  const reviewCards  = frameAnalyses.filter(f => { const s = f.frameScore ?? 100; return s >= 60 && s < 80; }).length;
+  const totalIssues  = findings.filter(f => f.severity === "error" || f.severity === "warn").length;
 
-  const nonCssFindings = findings.filter(f => f.category !== "css");
-  const hasIssues   = nonCssFindings.length > 0;
-  const hasChecks   = functional && (
+  // Aggregate per-dimension score across all frames
+  const dimAgg = {};
+  for (const fa of frameAnalyses) {
+    for (const [key, dim] of Object.entries(fa.analysis?.dimensions ?? {})) {
+      if (!dimAgg[key]) dimAgg[key] = [];
+      dimAgg[key].push(dim.score ?? 0);
+    }
+  }
+
+  const hasFunctional = functional && (
     (functional.consoleErrors?.length ?? 0) +
     (functional.networkErrors?.length  ?? 0) +
     (functional.brokenLinks?.length    ?? 0) +
     (functional.a11y?.flatMap(x => x.violations)?.length ?? 0)
   ) > 0;
 
+  const hasPrd = prdAcs?.length > 0 ||
+    coverageGaps.missingScreens?.length > 0 ||
+    coverageGaps.untestedActions?.length > 0;
+
+  const sc = avgScore;
+  const scoreColor  = sc === null ? V.muted : sc >= 80 ? V.green : sc >= 60 ? V.amber : V.red;
+  const scoreVerdict = sc === null ? "No data" : sc >= 80 ? "Passing" : sc >= 60 ? "Needs review" : "Failing";
+
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QA Report · ${escapeHtml(runId)}</title>
-<style>
-  :root {
-    --bg:#0b0f1a; --panel:#111827; --panel2:#1a2235; --border:#1e2640;
-    --text:#e2e8f0; --muted:#94a3b8; --dim:#64748b;
-    --blue:#3b82f6; --green:#22c55e; --yellow:#eab308; --red:#ef4444;
-  }
-  *{box-sizing:border-box;}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-       background:var(--bg);color:var(--text);line-height:1.5;}
-  .wrap{max-width:1140px;margin:0 auto;padding:20px 24px;}
-  /* Issue filter buttons */
-  .ifl{background:var(--panel2);border:1px solid var(--border);border-radius:20px;
-       color:var(--muted);font-size:11px;font-weight:600;padding:4px 12px;cursor:pointer;}
-  .ifl:hover{border-color:var(--blue);color:var(--text);}
-  .ifl.on{background:var(--blue);border-color:var(--blue);color:#fff;}
-
-  /* Nav */
-  #nav{position:sticky;top:0;z-index:100;background:rgba(11,15,26,.96);backdrop-filter:blur(8px);
-       border-bottom:1px solid var(--border);display:flex;gap:2px;padding:6px 24px;overflow-x:auto;}
-  #nav a{color:var(--muted);font-size:12px;font-weight:600;text-decoration:none;padding:5px 12px;
-         border-radius:6px;white-space:nowrap;}
-  #nav a:hover,#nav a.on{background:var(--panel);color:var(--text);}
-
-  /* Hero */
-  .hero{background:linear-gradient(135deg,#1a2550,#111827);border:1px solid var(--border);
-        border-radius:14px;padding:24px 28px;margin-bottom:18px;display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap;}
-  .hero-score{flex-shrink:0;text-align:center;}
-  .big-score{font-size:68px;font-weight:900;line-height:1;}
-  .score-label{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:.08em;}
-  .verdict{font-size:13px;font-weight:600;margin-top:6px;}
-  .hero-body{flex:1;min-width:240px;}
-  .hero-title{font-size:22px;font-weight:800;margin:0 0 4px;}
-  .hero-sub{color:var(--muted);font-size:12px;margin-bottom:12px;}
-  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
-  .chip{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;}
-  .chip.e{background:rgba(239,68,68,.15);color:#fca5a5;}
-  .chip.w{background:rgba(234,179,8,.15);color:#fde68a;}
-  .chip.i{background:rgba(59,130,246,.15);color:#93c5fd;}
-  .chip.g{background:rgba(34,197,94,.15);color:#86efac;}
-  .hero-explain{font-size:13px;color:#94a3b8;line-height:1.6;}
-
-  /* Section */
-  section{background:var(--panel);border:1px solid var(--border);border-radius:12px;
-          padding:0;margin-bottom:14px;overflow:hidden;}
-  .sec-hd{padding:14px 20px;display:flex;justify-content:space-between;align-items:center;
-          cursor:pointer;user-select:none;border-bottom:1px solid var(--border);}
-  .sec-hd:hover{background:#141e30;}
-  .sec-hd h2{margin:0;font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;}
-  .sec-hd .aud{font-size:11px;background:var(--panel2);padding:2px 8px;border-radius:6px;
-               color:var(--muted);font-weight:500;}
-  .sec-hd .tog{color:var(--muted);font-size:14px;transition:transform .2s;flex-shrink:0;}
-  .sec-body{padding:16px 20px;}
-  section.shut .sec-body{display:none;}
-  section.shut .tog{transform:rotate(-90deg);}
-
-  /* Frame card */
-  .fc{border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden;background:var(--panel2);}
-  .fc-hd{padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;
-         cursor:pointer;user-select:none;}
-  .fc-hd:hover{background:#1f2d45;}
-  .fc.open .fc-hd{border-bottom:1px solid var(--border);}
-  .fc-body{display:none;padding:14px 16px;}
-  .fc.open .fc-body{display:block;}
-  .chev{color:var(--muted);font-size:13px;transition:transform .2s;flex-shrink:0;}
-  .fc.open .chev{transform:rotate(90deg);}
-
-  /* Score ring */
-  .ring{width:52px;height:52px;border-radius:50%;display:flex;flex-direction:column;align-items:center;
-        justify-content:center;font-weight:900;font-size:16px;border:3px solid;flex-shrink:0;}
-  .ring small{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
-
-  /* Tabs */
-  .tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin:-14px -16px 14px;}
-  .tb{padding:8px 16px;font-size:12px;font-weight:600;border:none;background:none;
-      color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
-  .tb.on{color:var(--blue);border-bottom-color:var(--blue);}
-  .tp{display:none;}
-  .tp.on{display:block;}
-
-  /* Screenshots */
-  .ss-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-  .ss-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
-            font-weight:600;margin-bottom:5px;}
-  .ss-grid img{width:100%;border-radius:7px;display:block;}
-  .ss-empty{display:flex;align-items:center;justify-content:center;height:160px;
-            border:2px dashed var(--border);border-radius:7px;color:var(--dim);font-size:12px;text-align:center;padding:12px;}
-
-  /* Dimension pills */
-  .dim-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
-  .dp{padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid;}
-
-  /* Finding */
-  .finding{border-radius:6px;padding:9px 12px;margin-bottom:6px;border-left:3px solid;}
-  .finding.error{background:rgba(239,68,68,.07);border-left-color:var(--red);}
-  .finding.warn{background:rgba(234,179,8,.07);border-left-color:var(--yellow);}
-  .finding.info{background:rgba(59,130,246,.07);border-left-color:var(--blue);}
-  .f-head{font-size:11px;color:var(--muted);margin-bottom:3px;}
-  .f-desc{font-size:13px;}
-
-  /* Table */
-  table{width:100%;border-collapse:collapse;font-size:13px;}
-  th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);}
-  th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:500;}
-
-  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;}
-  .pill.matched{background:rgba(34,197,94,.15);color:#86efac;}
-  .pill.review{background:rgba(234,179,8,.15);color:#fde68a;}
-  .pill.unmatched{background:rgba(239,68,68,.15);color:#fca5a5;}
-  .pill.pass{background:rgba(34,197,94,.15);color:#86efac;}
-  .pill.fail{background:rgba(239,68,68,.15);color:#fca5a5;}
-  .pill.partial{background:rgba(234,179,8,.15);color:#fde68a;}
-
-  footer{color:var(--dim);font-size:12px;text-align:center;padding:14px;}
-</style>
+<title>QA Report · ${esc(runId)}</title>
+<style>${CSS}</style>
 </head><body>
 
-<nav id="nav">
-  <a href="#frames">Frames</a>
-  ${hasIssues  ? `<a href="#issues">Issues</a>`  : ""}
-  ${hasChecks  ? `<a href="#checks">Checks</a>`  : ""}
-  <a href="#logs">Logs</a>
-  <a href="#debug">Debug</a>
+<!-- NAV -->
+<nav id="topnav">
+  <div class="nav-inner">
+    <span class="nav-brand">QA Report</span>
+    <div class="nav-links">
+      <a href="#summary">Summary</a>
+      <a href="#screens">Screens</a>
+      ${hasFunctional || hasPrd ? `<a href="#checks">Checks</a>` : ""}
+      <a href="#runinfo">Run Info</a>
+    </div>
+    <span class="nav-run">${esc(runId)}</span>
+  </div>
 </nav>
 
-<div class="wrap">
+<main>
 
 ${warnings.length ? `
-<div style="background:rgba(234,179,8,.1);border:1px solid rgba(234,179,8,.3);border-radius:10px;
-            padding:12px 16px;margin-bottom:14px;font-size:13px;color:#fcd34d;">
-  ⚠ ${warnings.map(w => `<strong>${escapeHtml(w.step)}:</strong> ${escapeHtml(w.message.slice(0,160))}`).join(" · ")}
+<div class="warn-banner">
+  <span class="warn-icon">⚠</span>
+  <span>${warnings.map(w => `<strong>${esc(w.step)}:</strong> ${esc(w.message.slice(0,160))}`).join(" · ")}</span>
 </div>` : ""}
 
-<!-- HERO -->
-<div class="hero">
-  <div class="hero-body" style="flex:1">
+<!-- L2: HERO SUMMARY BAND -->
+<section id="summary" class="hero-band">
+  <div class="hero-left">
+    <div class="score-ring" style="--sc:${scoreColor}">
+      <span class="score-num">${sc ?? "—"}</span>
+      <span class="score-denom">/100</span>
+    </div>
+    <span class="score-verdict" style="color:${scoreColor}">${scoreVerdict}</span>
+  </div>
+  <div class="hero-right">
     <div class="hero-title">Frontend QA Report</div>
-    <div class="hero-sub">${escapeHtml(meta.liveUrl)} · ${escapeHtml(now.slice(0,16).replace("T"," "))}</div>
-    <div class="chips" style="margin-top:10px">
-      ${nonCssFindings.filter(f=>f.severity==="error").length ? `<span class="chip e">${nonCssFindings.filter(f=>f.severity==="error").length} error${nonCssFindings.filter(f=>f.severity==="error").length>1?"s":""}</span>` : ""}
-      ${nonCssFindings.filter(f=>f.severity==="warn").length  ? `<span class="chip w">${nonCssFindings.filter(f=>f.severity==="warn").length} warning${nonCssFindings.filter(f=>f.severity==="warn").length>1?"s":""}</span>`  : ""}
-      ${findings.filter(f=>f.category==="css"||f.category==="focused-vision").length ? `<span class="chip i">${findings.filter(f=>f.category==="css"||f.category==="focused-vision").length} CSS deviation${findings.filter(f=>f.category==="css"||f.category==="focused-vision").length>1?"s":""}</span>` : ""}
-      <span class="chip g">${matched.length + review.length} frame${matched.length+review.length!==1?"s":""} compared</span>
-      ${unmatched.length ? `<span class="chip i">${unmatched.length} unmatched</span>` : ""}
-      <span class="chip i">${states.length} states explored</span>
-      ${frameAnalyses.length ? `<span class="chip g">avg fidelity ${Math.round(frameAnalyses.reduce((a,f)=>a+(f.frameScore??0),0)/frameAnalyses.length)}/100</span>` : ""}
+    <div class="hero-meta">${esc(meta.liveUrl)} · ${esc(now.slice(0,10))}</div>
+    <div class="hero-stats">
+      <div class="stat-pill"><span class="stat-val">${compared.length}</span><span class="stat-lbl">screens</span></div>
+      ${failingCards ? `<div class="stat-pill red"><span class="stat-val">${failingCards}</span><span class="stat-lbl">failing</span></div>` : ""}
+      ${reviewCards  ? `<div class="stat-pill amber"><span class="stat-val">${reviewCards}</span><span class="stat-lbl">review</span></div>` : ""}
+      ${totalIssues  ? `<div class="stat-pill"><span class="stat-val">${totalIssues}</span><span class="stat-lbl">issues</span></div>` : ""}
+      ${unmatched.length ? `<div class="stat-pill muted"><span class="stat-val">${unmatched.length}</span><span class="stat-lbl">unmatched</span></div>` : ""}
+    </div>
+    <div class="dim-chips">
+      ${Object.entries(DIM_META).map(([key, { label }]) => {
+        const scores = dimAgg[key] ?? [];
+        const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+        const col = avg === null ? V.muted : avg >= 80 ? V.green : avg >= 60 ? V.amber : V.red;
+        const bg  = avg === null ? "rgba(113,113,122,.1)" : avg >= 80 ? "rgba(16,185,129,.1)" : avg >= 60 ? "rgba(245,158,11,.1)" : "rgba(244,63,94,.1)";
+        const icon = avg === null ? "—" : avg >= 80 ? "✓" : "✗";
+        return `<span class="dim-chip" style="color:${col};background:${bg};border-color:${col}" data-dim="${key}">
+          <span class="dim-chip-icon">${icon}</span>${esc(label)}${avg !== null ? ` <span class="dim-chip-score">${avg}</span>` : ""}
+        </span>`;
+      }).join("")}
     </div>
   </div>
-</div>
-
-<!-- SECTION 1: FRAME COMPARISONS -->
-<section id="frames">
-  <div class="sec-hd">
-    <h2>Frame Comparisons <span class="aud">Designer / QA</span></h2>
-    <span class="tog">▾</span>
-  </div>
-  <div class="sec-body">
-    ${renderFrameCards(states, matches, findings, frames, frameAnalyses)}
-    ${unmatched.length ? `
-    <details style="margin-top:8px;">
-      <summary style="cursor:pointer;font-size:12px;color:var(--muted);padding:6px 0;">
-        ${unmatched.length} state${unmatched.length>1?"s":""} had no Figma match
-      </summary>
-      <div style="font-size:12px;color:var(--dim);margin-top:6px;padding-left:12px;line-height:1.8;">
-        ${unmatched.map(m => {
-          const s = states.find(x => x.id === m.stateId);
-          return escapeHtml(s ? `${s.id} — ${s.triggerDesc}` : m.stateId);
-        }).join("<br>")}
-      </div>
-    </details>` : ""}
-  </div>
 </section>
 
-<!-- SECTION 2: ALL ISSUES (only if there are findings) -->
-${hasIssues ? `
-<section id="issues" class="shut">
-  <div class="sec-hd">
-    <h2>Issues <span class="aud">QA / Designer</span>
-      <span style="font-size:12px;font-weight:400;color:var(--muted);">&nbsp;${nonCssFindings.filter(f=>f.severity==="error").length} errors · ${nonCssFindings.filter(f=>f.severity==="warn").length} warnings</span>
-    </h2>
-    <span class="tog">▾</span>
+<!-- L3: SCREEN CARDS -->
+<section id="screens">
+  <div class="section-header">
+    <h2>Screen Comparisons</h2>
+    <span class="section-sub">${compared.length} screen${compared.length !== 1 ? "s" : ""} · sorted by fidelity</span>
   </div>
-  <div class="sec-body">
-    <div id="issue-filters" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
-      <button class="ifl on" data-f="all">All</button>
-      <button class="ifl" data-f="error">Errors</button>
-      <button class="ifl" data-f="warn">Warnings</button>
-      ${[...new Set(nonCssFindings.map(f=>f.category).filter(Boolean))].map(c=>`<button class="ifl" data-f="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("")}
-    </div>
-    <div id="issue-list">${renderAllIssues(nonCssFindings, states)}</div>
+  ${renderScreenCards(states, matches, findings, frames, frameAnalyses)}
+  ${unmatched.length ? `
+  <div class="unmatched-note">
+    <span>${unmatched.length} state${unmatched.length > 1 ? "s" : ""} had no Figma match —</span>
+    <span style="color:${V.muted}">${unmatched.map(m => {
+      const s = states.find(x => x.stateId === m.stateId || x.id === m.stateId);
+      return s ? esc(s.triggerDesc) : m.stateId;
+    }).slice(0, 4).join(", ")}${unmatched.length > 4 ? ` +${unmatched.length - 4} more` : ""}</span>
+  </div>` : ""}
+</section>
+
+<!-- L4: FOOTER ACCORDIONS -->
+${hasFunctional || hasPrd ? `
+<section id="checks">
+  <div class="section-header">
+    <h2>Checks</h2>
   </div>
+  ${hasFunctional ? renderFunctionalAccordion(functional) : ""}
+  ${hasPrd ? renderPrdAccordion(prdAcs, coverageGaps) : ""}
 </section>` : ""}
 
-<!-- SECTION 3: FUNCTIONAL + A11Y CHECKS -->
-${hasChecks ? `
-<section id="checks" class="shut">
-  <div class="sec-hd">
-    <h2>Functional &amp; Accessibility Checks <span class="aud">QA</span></h2>
-    <span class="tog">▾</span>
+<section id="runinfo">
+  <div class="section-header">
+    <h2>Run Info</h2>
   </div>
-  <div class="sec-body">${renderChecks(functional)}</div>
-</section>` : ""}
-
-<!-- SECTION 4: LOGS -->
-<section id="logs" class="shut">
-  <div class="sec-hd">
-    <h2>Run Logs <span class="aud">QA / PM</span></h2>
-    <span class="tog">▾</span>
-  </div>
-  <div class="sec-body">
-    ${renderLogs({ states, matches, frames, findings, functional, prdAcs, coverageGaps, warnings, aiStats })}
-  </div>
+  ${renderRunInfo({ states, matches, frames, findings, warnings, aiStats, meta, now })}
 </section>
 
-<!-- SECTION 5: DEBUG -->
-<section id="debug" class="shut">
-  <div class="sec-hd">
-    <h2>Debug &amp; Metadata</h2>
-    <span class="tog">▾</span>
-  </div>
-  <div class="sec-body">
-    ${renderDebug({ states, matches, prdAcs, coverageGaps, meta, aiStats, now })}
-  </div>
-</section>
+</main>
 
-</div>
-<footer>QA Agent · ${escapeHtml(runId)} · ${escapeHtml(now)}</footer>
+<footer class="page-footer">
+  QA Agent · ${esc(runId)} · ${esc(now.slice(0, 19).replace("T", " "))}
+</footer>
 
-<script>
-  // Section toggle
-  document.querySelectorAll(".sec-hd").forEach(h =>
-    h.addEventListener("click", () => h.closest("section").classList.toggle("shut"))
-  );
-  // Frame card accordion
-  document.querySelectorAll(".fc-hd").forEach(h =>
-    h.addEventListener("click", () => h.closest(".fc").classList.toggle("open"))
-  );
-  // Tabs
-  document.querySelectorAll(".tb").forEach(btn =>
-    btn.addEventListener("click", () => {
-      const body = btn.closest(".fc-body");
-      body.querySelectorAll(".tb").forEach(b => b.classList.remove("on"));
-      body.querySelectorAll(".tp").forEach(p => p.classList.remove("on"));
-      btn.classList.add("on");
-      body.querySelector("[data-t='" + btn.dataset.t + "']").classList.add("on");
-    })
-  );
-  // Nav highlight
-  const obs = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (e.isIntersecting)
-        document.querySelectorAll("#nav a").forEach(a =>
-          a.classList.toggle("on", a.getAttribute("href") === "#" + e.target.id)
-        );
-    });
-  }, { rootMargin:"-40% 0px -55% 0px" });
-  document.querySelectorAll("section[id]").forEach(s => obs.observe(s));
-
-  // Issue filters
-  document.querySelectorAll(".ifl").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".ifl").forEach(b => b.classList.remove("on"));
-      btn.classList.add("on");
-      const f = btn.dataset.f;
-      document.querySelectorAll("#issue-list .finding").forEach(el => {
-        if (f === "all") { el.style.display = ""; return; }
-        const matchSev = el.classList.contains(f);
-        const matchCat = el.querySelector(".f-head")?.textContent?.toLowerCase().startsWith(f.toLowerCase());
-        el.style.display = (matchSev || matchCat) ? "" : "none";
-      });
-    });
-  });
-</script>
+<script>${JS}</script>
 </body></html>`;
 }
 
-// ─── Frame cards ─────────────────────────────────────────────────────────────
+// ─── Design tokens ────────────────────────────────────────────────────────────
 
-const DIM_META = {
-  layoutStructure:    "Layout",
-  typography:         "Typography",
-  colors:             "Colors",
-  componentStyling:   "Components",
-  iconsAssets:        "Icons",
-  interactionsStates: "Interactions",
-  contentAccuracy:    "Content",
+const V = {
+  bg:       "#09090B",
+  surface1: "#18181B",
+  surface2: "#1C1C1F",
+  surface3: "#27272A",
+  border:   "#27272A",
+  borderMd: "#3F3F46",
+  text:     "#FAFAFA",
+  textSec:  "#A1A1AA",
+  muted:    "#71717A",
+  red:      "#F43F5E",
+  amber:    "#F59E0B",
+  green:    "#10B981",
+  blue:     "#3B82F6",
+  violet:   "#8B5CF6",
 };
 
-function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
-  // Only show matched + review states as full cards, sorted worst fidelity first
+// ─── Dimension metadata ───────────────────────────────────────────────────────
+
+const DIM_META = {
+  layoutStructure:    { label: "Layout",       desc: "Grid, alignment, spacing, column widths" },
+  typography:         { label: "Typography",   desc: "Font sizes, weights, line-heights" },
+  colors:             { label: "Colors",       desc: "Background, text, accent, border colors" },
+  componentStyling:   { label: "Components",   desc: "Button, input, card, table styles" },
+  iconsAssets:        { label: "Icons",        desc: "Icon presence, size, and style" },
+  interactionsStates: { label: "Interactions", desc: "Hover, active, disabled, empty states" },
+  contentAccuracy:    { label: "Content",      desc: "Labels, placeholders, error messages" },
+};
+
+// ─── Screen cards ─────────────────────────────────────────────────────────────
+
+function renderScreenCards(states, matches, allFindings, frames, frameAnalyses) {
   const relevant = states
     .filter(s => {
       const m = matches.find(x => x.stateId === s.id);
@@ -320,485 +202,634 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
     .sort((a, b) => {
       const fa = frameAnalyses.find(x => x.stateId === a.id);
       const fb = frameAnalyses.find(x => x.stateId === b.id);
-      const sa = fa?.frameScore ?? 50;
-      const sb = fb?.frameScore ?? 50;
-      const ea = allFindings.filter(f => f.stateId === a.id && f.severity === "error").length;
-      const eb = allFindings.filter(f => f.stateId === b.id && f.severity === "error").length;
-      return (sa - ea * 10) - (sb - eb * 10);
+      return (fa?.frameScore ?? 50) - (fb?.frameScore ?? 50);
     });
-  if (!relevant.length) return `<p style="color:var(--muted);font-size:13px">No matched frames — check Figma URL and page scope.</p>`;
 
-  return relevant.map(s => {
-    const m        = matches.find(x => x.stateId === s.id);
-    const frame    = m?.frameId ? frames.find(f => f.id === m.frameId) : null;
-    const findings = allFindings.filter(f => f.stateId === s.id);
-    const nonCssFindings = findings.filter(f => f.category !== "css");
-    const errs     = nonCssFindings.filter(f => f.severity === "error").length;
-    const warns    = nonCssFindings.filter(f => f.severity === "warn").length;
-    const fa       = frameAnalyses.find(x => x.stateId === s.id);
-    const score    = fa?.frameScore ?? null;
-    const rc       = score === null ? "#64748b" : score >= 75 ? "#22c55e" : score >= 50 ? "#eab308" : "#ef4444";
+  if (!relevant.length)
+    return `<p class="empty-msg">No matched frames found — check your Figma URL and page scope.</p>`;
 
-    // Score ring
-    const ring = score !== null ? `
-      <div class="ring" style="border-color:${rc};color:${rc}">
-        ${score}<small>/100</small>
-      </div>` : "";
+  return relevant.map((s, idx) => renderScreenCard(s, idx, matches, allFindings, frames, frameAnalyses)).join("");
+}
 
-    // Summary (1-line AI verdict)
-    const summary = fa?.summary
-      ? `<div style="font-size:11px;color:#cbd5e1;margin-top:4px;border-left:2px solid #3b82f6;padding-left:7px;line-height:1.5">${escapeHtml(fa.summary)}</div>`
-      : "";
+function renderScreenCard(s, idx, matches, allFindings, frames, frameAnalyses) {
+  const m      = matches.find(x => x.stateId === s.id);
+  const frame  = m?.frameId ? frames.find(f => f.id === m.frameId) : null;
+  const fa     = frameAnalyses.find(x => x.stateId === s.id);
+  const score  = fa?.frameScore ?? null;
+  const dims   = fa?.analysis?.dimensions ?? {};
 
-    // Form interaction badge
-    const formBadge = s.formInteraction ? `
-      <div style="margin-top:5px;display:inline-flex;align-items:center;gap:6px;font-size:11px;
-                  background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);
-                  border-radius:6px;padding:3px 8px;color:#86efac">
-        <span>⌨ Form filled</span>
-        <span style="color:var(--muted)">${s.formInteraction.filled.map(f=>`${escapeHtml(f.field)}: "${escapeHtml(f.value)}"`).join(" · ")}</span>
-        ${s.formInteraction.submitted ? `<span style="color:#22c55e">→ submitted (${escapeHtml(s.formInteraction.submitLabel)})</span>` : `<span style="color:#eab308">→ not submitted</span>`}
-      </div>` : "";
+  const cardFindings = allFindings.filter(f => f.stateId === s.id);
+  const cssFindings  = cardFindings.filter(f => f.category === "css" || f.category === "focused-vision");
 
-    // TAB 1 — Screenshots
-    const liveImg = s.screenshot ? `
-      <div>
-        <div class="ss-label">Live · ${escapeHtml(s.url.replace(/^https?:\/\/[^/]+/, ""))}</div>
-        <img src="data:image/jpeg;base64,${s.screenshot}" style="border:2px solid #3b82f6;" alt="live">
-      </div>` : "";
+  const sc = score;
+  const borderColor = sc === null ? V.borderMd : sc >= 80 ? V.green : sc >= 60 ? V.amber : V.red;
+  const scoreColor  = borderColor;
+  const autoOpen    = sc !== null && sc < 80;
+  const cardId      = `card-${s.id}`;
 
-    const figmaImg = m?.framePng ? `
-      <div>
-        <div class="ss-label">Figma · ${escapeHtml(frame?.name ?? "—")} (${(m.confidence*100).toFixed(0)}% match)</div>
-        <img src="data:image/png;base64,${m.framePng}" style="border:2px solid #22c55e;background:#fff;" alt="figma">
-      </div>` : `
-      <div>
-        <div class="ss-label">Figma · ${frame ? escapeHtml(frame.name) + " — PNG pending" : "No match"}</div>
-        <div class="ss-empty">${frame ? "Figma PNG not exported (API rate limit or first run)" : "No Figma frame matched this state"}</div>
-      </div>`;
+  // ── Dimension rows ──────────────────────────────────────────────────────────
+  const failingDims = Object.entries(DIM_META)
+    .map(([key, meta]) => ({ key, meta, d: dims[key] }))
+    .filter(x => x.d && x.d.score < 80)
+    .sort((a, b) => a.d.score - b.d.score);
 
-    // TAB 2 — Dimensions (compact pills + note for worst dim)
-    const dims      = fa?.analysis?.dimensions ?? {};
-    const dimPills  = Object.entries(DIM_META).map(([key, label]) => {
-      const d  = dims[key];
-      const sc = d?.score ?? 0;
-      const c  = sc >= 75 ? "#22c55e" : sc >= 50 ? "#eab308" : "#ef4444";
-      const bc = sc >= 75 ? "rgba(34,197,94,.25)" : sc >= 50 ? "rgba(234,179,8,.25)" : "rgba(239,68,68,.25)";
-      return `<span class="dp" style="color:${c};background:${bc};border-color:${c}">${label} ${d ? sc : "—"}</span>`;
-    }).join("");
+  const passingDims = Object.entries(DIM_META)
+    .map(([key, meta]) => ({ key, meta, d: dims[key] }))
+    .filter(x => x.d && x.d.score >= 80);
 
-    const worstDims = Object.entries(DIM_META)
-      .map(([key, label]) => ({ key, label, d: dims[key] }))
-      .filter(x => x.d && x.d.score < 70 && x.d.notes && x.d.notes !== "—")
-      .sort((a,b) => a.d.score - b.d.score)
-      .slice(0, 2);
-
-    const dimDetail = worstDims.map(({ label, d }) => {
-      const c = d.score >= 50 ? "#eab308" : "#ef4444";
-      return `<div style="margin-top:10px;padding:8px 10px;background:rgba(0,0,0,.2);border-radius:6px;border-left:2px solid ${c}">
-        <span style="font-size:11px;font-weight:700;color:${c}">${escapeHtml(label)} · ${d.score}/100</span>
-        <div style="font-size:12px;color:#cbd5e1;margin-top:3px;line-height:1.5">${escapeHtml(d.notes)}</div>
-        ${(d.issues??[]).slice(0,3).map(i=>`<div style="font-size:11px;color:var(--muted);padding-top:3px;">· ${escapeHtml(i)}</div>`).join("")}
-      </div>`;
-    }).join("");
-
-    const tabDimensions = fa ? `<div class="dim-row">${dimPills}</div>${dimDetail}` :
-      `<p style="color:var(--muted);font-size:13px">No analysis available.</p>`;
-
-    // TAB 3 — CSS Deviations (deterministic diff + focused-region vision)
-    const cssFindings = findings.filter(f => f.category === "css" || f.category === "focused-vision");
-    const tabCss = cssFindings.length ? `
-      <div style="margin-bottom:8px;font-size:12px;color:var(--muted)">
-        Computed CSS vs Figma design tokens — major params only (font-size, padding, color, border-radius)
-      </div>
-      <table style="font-size:12px;width:100%">
-        <thead><tr>
-          <th>Element</th><th>Property</th><th>Live</th><th>Figma</th><th></th>
-        </tr></thead>
-        <tbody>
-        ${cssFindings.map(f => {
-          // Parse description: "Button "Save": font-size is 14px in live, 16px in Figma"
-          const m = f.description.match(/^(.+?):\s+(.+?) is (.+?) in live,\s*(.+?) in Figma/);
-          const el   = m ? escapeHtml(m[1]) : escapeHtml(f.description);
-          const prop = m ? escapeHtml(m[2]) : "";
-          const lv   = m ? escapeHtml(m[3]) : "";
-          const fv   = m ? escapeHtml(m[4]) : "";
-          const sev  = f.severity === "error" ? "#ef4444" : "#eab308";
-          return `<tr>
-            <td style="color:#e2e8f0;font-weight:600">${el}</td>
-            <td style="color:#94a3b8;font-family:monospace">${prop}</td>
-            <td style="font-family:monospace;color:#93c5fd">${lv}</td>
-            <td style="font-family:monospace;color:#86efac">${fv}</td>
-            <td><span style="color:${sev};font-size:10px;font-weight:700">${f.severity.toUpperCase()}</span></td>
-          </tr>`;
-        }).join("")}
-        </tbody>
-      </table>` :
-      `<p style="color:var(--muted);font-size:13px;margin:0">
-        ${s.cssProperties ? "No CSS deviations detected — live values match Figma design tokens." : "CSS extraction not available for this state."}
-      </p>`;
-
-    // TAB 4 — Issues (top 5 only, link to full Issues section for more)
-    const topFindings = findings.filter(f => f.category !== "css").slice(0, 5);
-    const tabIssues = topFindings.length ? `
-      ${topFindings.map(f => `
-        <div class="finding ${f.severity}">
-          <div class="f-head">${escapeHtml((f.category||"general").toUpperCase())} · ${f.severity}</div>
-          <div class="f-desc">${escapeHtml(f.description)}</div>
-        </div>`).join("")}
-      ${findings.length > 5 ? `<a href="#issues" style="font-size:12px;color:var(--blue);">+ ${findings.length-5} more in Issues section</a>` : ""}` :
-      `<p style="color:var(--muted);font-size:13px;margin:0">No issues detected for this frame.</p>`;
-
+  const dimRows = failingDims.map(({ key, meta, d }) => {
+    const col = d.score >= 60 ? V.amber : V.red;
+    const bg  = d.score >= 60 ? "rgba(245,158,11,.06)" : "rgba(244,63,94,.06)";
+    const issues = (d.issues ?? []).slice(0, 3);
     return `
-    <div class="fc">
-      <div class="fc-hd">
-        <div style="min-width:0;flex:1">
-          <div style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            ${escapeHtml(s.triggerDesc)}
-          </div>
-          ${frame ? `<div style="font-size:11px;color:var(--muted);margin-top:1px">→ ${escapeHtml(frame.name)}</div>` : ""}
-          ${summary}
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;margin-left:12px">
-          <span class="pill ${m.status}">${m.status}</span>
-          ${errs  ? `<span class="chip e" style="padding:2px 8px;font-size:11px">${errs}E</span>` : ""}
-          ${warns ? `<span class="chip w" style="padding:2px 8px;font-size:11px">${warns}W</span>` : ""}
-          ${!errs&&!warns&&frame ? `<span style="font-size:12px;color:var(--green)">✓</span>` : ""}
-          ${ring}
-          <span class="chev">▶</span>
-        </div>
+    <div class="dim-row failing" style="border-left-color:${col};background:${bg}">
+      <div class="dim-row-header">
+        <span class="dim-status-dot" style="background:${col}"></span>
+        <span class="dim-label">${esc(meta.label)}</span>
+        <span class="dim-score" style="color:${col}">${d.score}</span>
+        <span class="dim-notes">${esc(d.notes ?? "")}</span>
       </div>
-      <div class="fc-body">
-        <div class="tabs">
-          <button class="tb on" data-t="ss">Screenshots</button>
-          <button class="tb" data-t="dim">Dimensions</button>
-          <button class="tb" data-t="css">CSS${cssFindings.length?` (${cssFindings.length})`:""}</button>
-          <button class="tb" data-t="iss">Issues${errs+warns>0?` (${errs+warns})`:""}</button>
-        </div>
-        <div class="tp on" data-t="ss">${formBadge}<div class="ss-grid">${liveImg}${figmaImg}</div></div>
-        <div class="tp" data-t="dim">${tabDimensions}</div>
-        <div class="tp" data-t="css">${tabCss}</div>
-        <div class="tp" data-t="iss">${tabIssues}</div>
-      </div>
+      ${issues.length ? `<ul class="dim-issues">
+        ${issues.map(i => `<li>${esc(i)}</li>`).join("")}
+      </ul>` : ""}
     </div>`;
   }).join("");
-}
 
-// ─── All Issues (deduped + rolled up, sorted by severity) ────────────────────
-
-function renderAllIssues(findings, states) {
-  // Roll up duplicate descriptions across states
-  const groups = new Map(); // key → { finding, stateIds[] }
-  for (const f of findings) {
-    const key = `${f.category}||${f.severity}||${f.description}`;
-    if (!groups.has(key)) groups.set(key, { finding: f, stateIds: [] });
-    if (f.stateId) groups.get(key).stateIds.push(f.stateId);
-  }
-
-  const deduped = [...groups.values()].sort((a,b) => {
-    const sev = { error:0, warn:1, info:2 };
-    return (sev[a.finding.severity]??2) - (sev[b.finding.severity]??2);
-  });
-
-  return deduped.map(({ finding: f, stateIds }) => {
-    const count = stateIds.length;
-    const stateLabels = stateIds.slice(0,3).map(id => {
-      const s = states.find(x => x.id === id);
-      return s ? escapeHtml(s.triggerDesc) : id;
-    });
-    return `
-      <div class="finding ${f.severity}">
-        <div class="f-head">${escapeHtml((f.category||"general").toUpperCase())} · ${f.severity}
-          ${count > 1 ? `<span style="background:rgba(255,255,255,.1);border-radius:4px;padding:1px 6px;margin-left:6px;font-size:10px">${count} states</span>` : ""}
-        </div>
-        <div class="f-desc">${escapeHtml(f.description)}</div>
-        ${count > 1 ? `<div style="color:var(--muted);font-size:11px;margin-top:3px">Seen in: ${stateLabels.join(", ")}${count>3?` +${count-3} more`:""}</div>` : ""}
-        ${f.evidence && count === 1 ? `<div style="color:var(--muted);font-size:11px;margin-top:3px">${escapeHtml(String(f.evidence))}</div>` : ""}
-      </div>`;
-  }).join("");
-}
-
-// ─── Functional + A11y checks ─────────────────────────────────────────────────
-
-function renderChecks(f) {
-  if (!f) return `<p style="color:var(--muted)">Not run.</p>`;
-  const blocks = [];
-
-  const allA11y = (f.a11y ?? []).flatMap(x => x.violations.map(v => ({ ...v, url: x.url })));
-
-  if (f.consoleErrors?.length)
-    blocks.push(...f.consoleErrors.slice(0,6).map(e =>
-      `<div class="finding error"><div class="f-head">CONSOLE ERROR</div><div class="f-desc">${escapeHtml(e.message?.slice(0,200))}</div></div>`));
-
-  if (f.networkErrors?.length)
-    blocks.push(...f.networkErrors.slice(0,6).map(e =>
-      `<div class="finding error"><div class="f-head">NETWORK ${e.status}</div><div class="f-desc">${escapeHtml(e.url?.slice(0,140))}</div></div>`));
-
-  if (f.brokenLinks?.length)
-    blocks.push(...f.brokenLinks.slice(0,6).map(e =>
-      `<div class="finding error"><div class="f-head">BROKEN LINK ${e.status}</div><div class="f-desc">${escapeHtml(e.href)}</div></div>`));
-
-  if (allA11y.length)
-    blocks.push(...allA11y.slice(0,8).map(v =>
-      `<div class="finding ${v.impact==="critical"?"error":"warn"}">
-        <div class="f-head">A11Y · ${v.impact?.toUpperCase()} · ${escapeHtml(v.id)}</div>
-        <div class="f-desc">${escapeHtml(v.description)}</div>
-      </div>`));
-
-  return blocks.length ? blocks.join("") :
-    `<p style="color:var(--green);font-size:13px">All checks passed.</p>`;
-}
-
-// ─── Debug section ────────────────────────────────────────────────────────────
-
-function renderDebug({ states, matches, prdAcs, coverageGaps, meta, aiStats, now }) {
-  const stateRows = states.map(s => {
-    const m = matches.find(x => x.stateId === s.id);
-    return `<tr>
-      <td><code style="font-size:11px">${escapeHtml(s.id)}</code></td>
-      <td style="font-size:12px">${escapeHtml(s.triggerDesc)}</td>
-      <td><span class="pill ${m?.status??'unmatched'}">${m?.status??'unmatched'}</span></td>
-      <td style="font-size:12px">${m?.frameName ? escapeHtml(m.frameName) : "—"}</td>
-      <td style="font-size:12px">${m ? (m.confidence*100).toFixed(0)+"%" : "—"}</td>
-    </tr>`;
-  }).join("");
-
-  const prdBlock = prdAcs?.length ? `
-    <div style="margin-top:16px">
-      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">PRD Acceptance Criteria</div>
-      <table><thead><tr><th>Criterion</th><th>Status</th></tr></thead><tbody>
-        ${prdAcs.map(a => `<tr><td style="font-size:12px">${escapeHtml(a.text)}</td><td><span class="pill ${a.status}">${a.status}</span></td></tr>`).join("")}
-      </tbody></table>
+  const passingRow = passingDims.length ? `
+    <div class="dim-row passing">
+      ${passingDims.map(({ meta, d }) =>
+        `<span class="pass-chip"><span class="pass-dot">✓</span>${esc(meta.label)} <span class="pass-score">${d.score}</span></span>`
+      ).join("")}
     </div>` : "";
 
-  const gapsBlock = (coverageGaps.missingScreens.length || coverageGaps.untestedActions.length) ? `
-    <div style="margin-top:16px">
-      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Coverage Gaps</div>
-      ${coverageGaps.missingScreens.map(s=>`<div class="finding error"><div class="f-head">MISSING SCREEN</div><div class="f-desc">${escapeHtml(s)}</div></div>`).join("")}
-      ${coverageGaps.untestedActions.map(a=>`<div class="finding warn"><div class="f-head">UNTESTED ACTION</div><div class="f-desc">${escapeHtml(a)}</div></div>`).join("")}
+  const noDimsMsg = !fa ? `<div class="no-analysis">Visual analysis unavailable for this state.</div>` : "";
+
+  // ── Screenshot toggle ────────────────────────────────────────────────────────
+  const liveImg  = s.screenshot
+    ? `<div><div class="ss-lbl">Live · ${esc(s.url.replace(/^https?:\/\/[^/]+/, "") || "/")}</div>
+       <img src="data:image/jpeg;base64,${s.screenshot}" class="ss-img live-img" alt="live screenshot"></div>`
+    : "";
+  const figmaImg = m?.framePng
+    ? `<div><div class="ss-lbl">Figma · ${esc(frame?.name ?? "—")} · ${(m.confidence * 100).toFixed(0)}% match</div>
+       <img src="data:image/png;base64,${m.framePng}" class="ss-img figma-img" alt="figma frame"></div>`
+    : `<div><div class="ss-lbl">Figma · ${frame ? esc(frame.name) : "No match"}</div>
+       <div class="ss-empty">${frame ? "PNG not exported" : "No Figma frame matched"}</div></div>`;
+
+  const ssPanel = `
+    <div class="inline-panel" id="ss-${cardId}" style="display:none">
+      <div class="ss-grid">${liveImg}${figmaImg}</div>
+      ${s.formInteraction ? `<div class="form-badge">
+        ⌨ Form filled: ${s.formInteraction.filled.map(f => `${esc(f.field)}: "${esc(f.value)}"`).join(" · ")}
+        ${s.formInteraction.submitted ? `→ submitted (${esc(s.formInteraction.submitLabel)})` : "→ not submitted"}
+      </div>` : ""}
+    </div>`;
+
+  // ── CSS table toggle ─────────────────────────────────────────────────────────
+  const cssPanel = cssFindings.length ? `
+    <div class="inline-panel" id="css-${cardId}" style="display:none">
+      <table class="css-table">
+        <thead><tr><th>Element</th><th>Property</th><th>Live</th><th>Figma</th><th></th></tr></thead>
+        <tbody>
+          ${cssFindings.map(f => {
+            const rx = f.description.match(/^(.+?):\s+(.+?) is (.+?) in live,\s*(.+?) in Figma/);
+            const el   = rx ? esc(rx[1]) : esc(f.description);
+            const prop = rx ? esc(rx[2]) : "";
+            const lv   = rx ? esc(rx[3]) : "";
+            const fv   = rx ? esc(rx[4]) : "";
+            const col  = f.severity === "error" ? V.red : V.amber;
+            return `<tr>
+              <td class="css-el">${el}</td>
+              <td class="css-prop">${prop}</td>
+              <td class="css-live">${lv}</td>
+              <td class="css-figma">${fv}</td>
+              <td><span class="sev-badge" style="color:${col}">${f.severity.toUpperCase()}</span></td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>` : "";
+
+  // ── Card toggle buttons ──────────────────────────────────────────────────────
+  const toggleBar = (s.screenshot || m?.framePng || cssFindings.length) ? `
+    <div class="card-toggles">
+      ${(s.screenshot || m?.framePng) ? `
+        <button class="toggle-btn" onclick="togglePanel('ss-${cardId}',this)">
+          Screenshots
+        </button>` : ""}
+      ${cssFindings.length ? `
+        <button class="toggle-btn" onclick="togglePanel('css-${cardId}',this)">
+          ${cssFindings.length} CSS deviation${cssFindings.length !== 1 ? "s" : ""}
+        </button>` : ""}
     </div>` : "";
 
   return `
-    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">State Map</div>
-    <table><thead><tr><th>ID</th><th>Trigger</th><th>Status</th><th>Figma Frame</th><th>Confidence</th></tr></thead>
-    <tbody>${stateRows}</tbody></table>
-    ${prdBlock}
-    ${gapsBlock}
-    <div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;color:var(--muted)">
-      <div>Live URL: ${escapeHtml(meta.liveUrl)}</div>
-      <div>Figma file: ${escapeHtml(meta.figmaFileKey??'—')}</div>
-      <div>Generated: ${escapeHtml(now)}</div>
-      <div>AI cost: $${(aiStats?.cost??0).toFixed(3)} · ${aiStats?.textCalls??0} text · ${aiStats?.visionCalls??0} vision</div>
-    </div>`;
+<div class="screen-card" id="${cardId}" style="--border-color:${borderColor}">
+  <!-- Card header (always visible) -->
+  <div class="card-header" onclick="toggleCard('${cardId}')">
+    ${s.screenshot ? `<img src="data:image/jpeg;base64,${s.screenshot}" class="card-thumb" alt="">` : `<div class="card-thumb-empty"></div>`}
+    <div class="card-meta">
+      <div class="card-title">${esc(s.triggerDesc)}</div>
+      ${frame ? `<div class="card-frame">↗ ${esc(frame.name)}</div>` : ""}
+      ${fa?.summary ? `<div class="card-summary">${esc(fa.summary)}</div>` : ""}
+    </div>
+    <div class="card-right">
+      <span class="match-badge ${m.status}">${m.status}</span>
+      ${score !== null ? `
+      <div class="score-badge" style="--sc:${scoreColor}">
+        <span class="sb-num">${score}</span>
+        <span class="sb-den">/100</span>
+      </div>` : ""}
+      <span class="card-chevron" id="chev-${cardId}">▾</span>
+    </div>
+  </div>
+
+  <!-- Card body (toggle on header click) -->
+  <div class="card-body" id="body-${cardId}" style="display:${autoOpen ? "block" : "none"}">
+    ${noDimsMsg}
+    ${dimRows}
+    ${passingRow}
+    ${toggleBar}
+    ${ssPanel}
+    ${cssPanel}
+  </div>
+</div>`;
 }
 
-// ─── Score helpers ────────────────────────────────────────────────────────────
+// ─── Functional accordion ─────────────────────────────────────────────────────
 
+function renderFunctionalAccordion(f) {
+  if (!f) return "";
+  const allA11y = (f.a11y ?? []).flatMap(x => x.violations.map(v => ({ ...v, url: x.url })));
+  const items = [];
 
-// ─── Run Logs ─────────────────────────────────────────────────────────────────
+  for (const e of (f.consoleErrors ?? []).slice(0, 8))
+    items.push({ sev: "error", cat: "Console Error", msg: e.message?.slice(0, 220) ?? "" });
+  for (const e of (f.networkErrors ?? []).slice(0, 8))
+    items.push({ sev: "error", cat: `Network ${e.status}`, msg: e.url?.slice(0, 180) ?? "" });
+  for (const e of (f.brokenLinks ?? []).slice(0, 8))
+    items.push({ sev: "error", cat: `Broken Link ${e.status}`, msg: e.href ?? "" });
+  for (const v of allA11y.slice(0, 10))
+    items.push({ sev: v.impact === "critical" ? "error" : "warn", cat: `A11Y · ${(v.id ?? "").toUpperCase()}`, msg: v.description ?? "" });
 
-function renderLogs({ states, matches, frames, findings, functional, prdAcs, coverageGaps, warnings, aiStats }) {
-  const rows = [];
+  const count = items.length;
+  const errCount  = items.filter(i => i.sev === "error").length;
+  const warnCount = items.filter(i => i.sev === "warn").length;
 
-  const logRow = (icon, color, label, detail = "") => `
-    <div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border)">
-      <span style="font-size:14px;flex-shrink:0;margin-top:1px">${icon}</span>
-      <div style="flex:1;min-width:0">
-        <span style="font-size:13px;font-weight:600;color:${color}">${escapeHtml(label)}</span>
-        ${detail ? `<span style="font-size:12px;color:var(--muted);margin-left:8px">${detail}</span>` : ""}
-      </div>
-    </div>`;
-
-  const group = (title) => `
-    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
-                color:var(--muted);margin:18px 0 4px;padding-bottom:4px;border-bottom:1px solid var(--border)">
-      ${title}
-    </div>`;
-
-  // ── WHAT WAS TESTED ────────────────────────────────────────────────────────
-
-  rows.push(group("✓ What Was Tested"));
-
-  // States explored
-  rows.push(logRow("🔍", "#86efac",
-    `${states.length} screen state${states.length!==1?"s":""} explored`,
-    "BFS click-exploration from the source URL"
-  ));
-
-  // Per-state detail
-  const matchedSet = new Set(matches.filter(m => m.frameId).map(m => m.stateId));
-  for (const s of states) {
-    const m     = matches.find(x => x.stateId === s.id);
-    const icon  = m?.status === "matched" ? "✓" : m?.status === "review" ? "~" : "·";
-    const color = m?.status === "matched" ? "#86efac" : m?.status === "review" ? "#fde68a" : "#94a3b8";
-    const frame = m?.frameName ? ` → Figma: "${m.frameName}" (${(m.confidence*100).toFixed(0)}%)` : " → no Figma match";
-    const errs  = findings.filter(f => f.stateId === s.id && f.severity === "error").length;
-    const errTxt = errs ? ` · ${errs} error${errs>1?"s":""}` : "";
-    rows.push(`
-      <div style="display:flex;gap:10px;align-items:baseline;padding:4px 0 4px 24px;border-bottom:1px solid #111827">
-        <span style="font-size:11px;color:${color};flex-shrink:0;font-weight:700">${icon}</span>
-        <div style="min-width:0">
-          <span style="font-size:12px;font-weight:600">${escapeHtml(s.triggerDesc)}</span>
-          <span style="font-size:11px;color:var(--muted)">${escapeHtml(frame)}${errTxt}</span>
-        </div>
-      </div>`);
-  }
-
-  // Figma frames evaluated
-  const framesMatched = new Set(matches.filter(m => m.frameId && (m.status==="matched"||m.status==="review")).map(m => m.frameId));
-  if (frames.length) {
-    rows.push(logRow("🎨", "#86efac",
-      `${framesMatched.size} of ${frames.length} Figma frame${frames.length!==1?"s":""} matched`,
-      "Frames scoped to the provided Figma page"
-    ));
-  }
-
-  // Functional checks
-  if (functional?.testedUrls?.length) {
-    rows.push(logRow("🔗", "#86efac",
-      `${functional.testedUrls.length} URL${functional.testedUrls.length!==1?"s":""} checked for broken links, console errors, network failures`
-    ));
-  }
-
-  // A11y
-  const a11yUrls = functional?.a11y?.length ?? 0;
-  if (a11yUrls) {
-    rows.push(logRow("♿", "#86efac", `Accessibility scan run on ${a11yUrls} page${a11yUrls!==1?"s":""}`));
-  }
-
-  // PRD
-  if (prdAcs?.length) {
-    const pass = prdAcs.filter(a => a.status === "pass").length;
-    rows.push(logRow("📋", "#86efac",
-      `${prdAcs.length} PRD acceptance criteria checked`,
-      `${pass} passed · ${prdAcs.length - pass} failed/partial`
-    ));
-  }
-
-  // ── WHAT WAS NOT TESTED & WHY ──────────────────────────────────────────────
-
-  rows.push(group("⚠ What Was Not Tested & Why"));
-
-  let anythingSkipped = false;
-
-  // Figma frames with no live state match
-  const unmatchedFrames = frames.filter(f => !framesMatched.has(f.id));
-  if (unmatchedFrames.length) {
-    anythingSkipped = true;
-    rows.push(logRow("🎨", "#fde68a",
-      `${unmatchedFrames.length} Figma frame${unmatchedFrames.length!==1?"s":""} were never matched to a live state`,
-      "These designs were not verified against the live app"
-    ));
-    for (const f of unmatchedFrames) {
-      rows.push(`
-        <div style="display:flex;gap:10px;align-items:baseline;padding:3px 0 3px 24px;border-bottom:1px solid #111827">
-          <span style="font-size:11px;color:#fde68a;flex-shrink:0">·</span>
-          <span style="font-size:12px;color:var(--muted)">"${escapeHtml(f.name)}"
-            <span style="color:var(--dim)"> — no live state reached this screen</span>
-          </span>
-        </div>`);
-    }
-  }
-
-  // States that hit the cap (heuristic: if states.length is a round number like 40)
-  const MAX_STATES = 40;
-  if (states.length >= MAX_STATES) {
-    anythingSkipped = true;
-    rows.push(logRow("🔢", "#fde68a",
-      `Exploration stopped at ${states.length} states (cap reached)`,
-      "There may be more screens — increase maxStates or use a starting frame URL to focus exploration"
-    ));
-  }
-
-  // Unmatched live states
-  const unmatchedStates = matches.filter(m => m.status === "unmatched");
-  if (unmatchedStates.length) {
-    anythingSkipped = true;
-    rows.push(logRow("❓", "#fde68a",
-      `${unmatchedStates.length} captured state${unmatchedStates.length!==1?"s":""} had no Figma frame match`,
-      "These screens exist in the live app but have no counterpart in the scoped Figma canvas"
-    ));
-  }
-
-  // Figma not available
-  const figmaWarn = warnings.find(w => w.step === "Figma");
-  if (figmaWarn) {
-    anythingSkipped = true;
-    rows.push(logRow("🎨", "#fca5a5",
-      "Figma design comparison skipped",
-      figmaWarn.message.slice(0, 120)
-    ));
-  }
-
-  // Functional tests failed
-  const funcWarn = warnings.find(w => w.step === "Functional");
-  if (funcWarn) {
-    anythingSkipped = true;
-    rows.push(logRow("🔗", "#fca5a5",
-      "Functional tests did not complete",
-      funcWarn.message.slice(0, 120)
-    ));
-  }
-
-  // PRD not provided
-  if (!prdAcs?.length) {
-    anythingSkipped = true;
-    rows.push(logRow("📋", "#94a3b8",
-      "PRD acceptance criteria — not checked",
-      "No PRD PDF was uploaded. Upload one to enable criteria checking and coverage gap detection."
-    ));
-  }
-
-  // Coverage gaps from PRD
-  if (coverageGaps.missingScreens?.length) {
-    anythingSkipped = true;
-    rows.push(logRow("📭", "#fde68a",
-      `${coverageGaps.missingScreens.length} PRD-described screen${coverageGaps.missingScreens.length!==1?"s":""} never captured`,
-      coverageGaps.missingScreens.slice(0,3).map(s => `"${s}"`).join(", ") + (coverageGaps.missingScreens.length > 3 ? "…" : "")
-    ));
-  }
-
-  if (coverageGaps.untestedActions?.length) {
-    anythingSkipped = true;
-    rows.push(logRow("🔲", "#fde68a",
-      `${coverageGaps.untestedActions.length} PRD-described action${coverageGaps.untestedActions.length!==1?"s":""} never triggered`,
-      coverageGaps.untestedActions.slice(0,3).map(a => `"${a}"`).join(", ") + (coverageGaps.untestedActions.length > 3 ? "…" : "")
-    ));
-  }
-
-  // Other warnings
-  for (const w of warnings.filter(w => w.step !== "Figma" && w.step !== "Functional")) {
-    anythingSkipped = true;
-    rows.push(logRow("⚠", "#fca5a5", `${w.step} step had an error`, w.message.slice(0, 120)));
-  }
-
-  if (!anythingSkipped) {
-    rows.push(`<div style="font-size:13px;color:var(--green);padding:8px 0">✓ Full coverage — no gaps detected.</div>`);
-  }
-
-  // ── AI USAGE ───────────────────────────────────────────────────────────────
-
-  if (aiStats) {
-    rows.push(group("AI Usage"));
-    rows.push(`
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;padding:6px 0">
-        ${[
-          ["Text calls",   aiStats.textCalls   ?? 0],
-          ["Vision calls", aiStats.visionCalls  ?? 0],
-          ["Cache hits",   aiStats.cacheHits    ?? 0],
-          ["Est. cost",    "$" + (aiStats.cost ?? 0).toFixed(3)],
-        ].map(([k,v]) => `
-          <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
-            <div style="font-size:11px;color:var(--muted)">${k}</div>
-            <div style="font-size:18px;font-weight:700">${v}</div>
-          </div>`).join("")}
-      </div>`);
-  }
-
-  return `<div style="line-height:1">${rows.join("")}</div>`;
+  return `
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">Functional &amp; Accessibility</span>
+    <span class="acc-meta">${errCount ? `<span style="color:${V.red}">${errCount} error${errCount>1?"s":""}</span>` : ""}${warnCount ? ` · <span style="color:${V.amber}">${warnCount} warning${warnCount>1?"s":""}</span>` : ""}${!count ? `<span style="color:${V.green}">All clear</span>` : ""}</span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    ${count ? items.map(i => `
+      <div class="finding-row ${i.sev}">
+        <span class="finding-cat">${esc(i.cat)}</span>
+        <span class="finding-msg">${esc(i.msg)}</span>
+      </div>`).join("") : `<div class="all-clear">✓ No functional or accessibility issues found.</div>`}
+  </div>
+</div>`;
 }
 
-function escapeHtml(s) {
+// ─── PRD accordion ────────────────────────────────────────────────────────────
+
+function renderPrdAccordion(prdAcs, coverageGaps) {
+  const passCount = (prdAcs ?? []).filter(a => a.status === "pass").length;
+  const totalAcs  = (prdAcs ?? []).length;
+  const gapCount  = (coverageGaps.missingScreens?.length ?? 0) + (coverageGaps.untestedActions?.length ?? 0);
+
+  return `
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">PRD Coverage</span>
+    <span class="acc-meta">${totalAcs ? `${passCount}/${totalAcs} criteria passed` : ""}${gapCount ? ` · <span style="color:${V.amber}">${gapCount} gap${gapCount>1?"s":""}</span>` : ""}</span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    ${totalAcs ? `
+    <div class="sub-section-label">Acceptance Criteria</div>
+    ${(prdAcs ?? []).map(a => `
+      <div class="finding-row ${a.status === "pass" ? "pass" : a.status === "fail" ? "error" : "warn"}">
+        <span class="finding-cat">${esc(a.id)}</span>
+        <span class="finding-msg">${esc(a.text)}</span>
+        <span class="status-tag ${a.status}">${a.status}</span>
+      </div>`).join("")}` : ""}
+    ${coverageGaps.missingScreens?.length ? `
+    <div class="sub-section-label" style="margin-top:12px">Missing Screens</div>
+    ${coverageGaps.missingScreens.map(s => `
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">${esc(s)}</span>
+      </div>`).join("")}` : ""}
+    ${coverageGaps.untestedActions?.length ? `
+    <div class="sub-section-label" style="margin-top:12px">Untested Actions</div>
+    ${coverageGaps.untestedActions.map(a => `
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">${esc(a)}</span>
+      </div>`).join("")}` : ""}
+  </div>
+</div>`;
+}
+
+// ─── Run info accordion ───────────────────────────────────────────────────────
+
+function renderRunInfo({ states, matches, frames, findings, warnings, aiStats, meta, now }) {
+  const stateRows = states.map(s => {
+    const m = matches.find(x => x.stateId === s.id);
+    const col = m?.status === "matched" ? V.green : m?.status === "review" ? V.amber : V.muted;
+    return `<tr>
+      <td style="color:${V.textSec};font-family:monospace;font-size:11px">${esc(s.id)}</td>
+      <td>${esc(s.triggerDesc)}</td>
+      <td><span class="status-tag ${m?.status ?? "unmatched"}">${m?.status ?? "unmatched"}</span></td>
+      <td style="color:${V.textSec}">${m?.frameName ? esc(m.frameName) : "—"}</td>
+      <td style="color:${V.textSec};text-align:right">${m ? (m.confidence * 100).toFixed(0) + "%" : "—"}</td>
+    </tr>`;
+  }).join("");
+
+  return `
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">State Map</span>
+    <span class="acc-meta">${states.length} states explored</span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    <table class="run-table">
+      <thead><tr><th>ID</th><th>Trigger</th><th>Status</th><th>Figma Frame</th><th style="text-align:right">Confidence</th></tr></thead>
+      <tbody>${stateRows}</tbody>
+    </table>
+  </div>
+</div>
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">Run Metadata</span>
+    <span class="acc-meta">${aiStats ? `$${(aiStats.cost ?? 0).toFixed(3)} · ${(aiStats.textCalls ?? 0) + (aiStats.visionCalls ?? 0)} AI calls` : ""}</span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    <div class="meta-grid">
+      <div class="meta-item"><div class="meta-lbl">Live URL</div><div class="meta-val">${esc(meta.liveUrl)}</div></div>
+      <div class="meta-item"><div class="meta-lbl">Figma File</div><div class="meta-val">${esc(meta.figmaFileKey ?? "—")}</div></div>
+      <div class="meta-item"><div class="meta-lbl">Generated</div><div class="meta-val">${esc(now.slice(0, 19).replace("T", " "))} UTC</div></div>
+      <div class="meta-item"><div class="meta-lbl">Run ID</div><div class="meta-val" style="font-family:monospace">${esc(meta.runId ?? "")}</div></div>
+      ${aiStats ? `
+      <div class="meta-item"><div class="meta-lbl">Text calls</div><div class="meta-val">${aiStats.textCalls ?? 0}</div></div>
+      <div class="meta-item"><div class="meta-lbl">Vision calls</div><div class="meta-val">${aiStats.visionCalls ?? 0}</div></div>
+      <div class="meta-item"><div class="meta-lbl">Cache hits</div><div class="meta-val">${aiStats.cacheHits ?? 0}</div></div>
+      <div class="meta-item"><div class="meta-lbl">Est. cost</div><div class="meta-val">$${(aiStats.cost ?? 0).toFixed(3)}</div></div>` : ""}
+    </div>
+    ${warnings.length ? `
+    <div class="sub-section-label" style="margin-top:16px">Warnings</div>
+    ${warnings.map(w => `<div class="finding-row warn"><span class="finding-cat">${esc(w.step)}</span><span class="finding-msg">${esc(w.message.slice(0, 180))}</span></div>`).join("")}` : ""}
+  </div>
+</div>`;
+}
+
+// ─── CSS ──────────────────────────────────────────────────────────────────────
+
+const CSS = `
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #09090B;
+    --s1:       #18181B;
+    --s2:       #1C1C1F;
+    --border:   #27272A;
+    --border-md:#3F3F46;
+    --text:     #FAFAFA;
+    --text-sec: #A1A1AA;
+    --muted:    #71717A;
+    --red:      #F43F5E;
+    --amber:    #F59E0B;
+    --green:    #10B981;
+    --blue:     #3B82F6;
+    --violet:   #8B5CF6;
+    --radius:   10px;
+    --radius-sm:6px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5; font-size: 14px;
+  }
+
+  /* NAV */
+  #topnav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(9,9,11,.92); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    max-width: 1120px; margin: 0 auto; padding: 0 24px;
+    display: flex; align-items: center; gap: 24px; height: 48px;
+  }
+  .nav-brand { font-size: 13px; font-weight: 700; color: var(--text); letter-spacing: -.01em; flex-shrink:0; }
+  .nav-links { display: flex; gap: 4px; }
+  .nav-links a {
+    font-size: 13px; font-weight: 500; color: var(--text-sec); text-decoration: none;
+    padding: 5px 10px; border-radius: var(--radius-sm); transition: color .15s, background .15s;
+  }
+  .nav-links a:hover, .nav-links a.active { color: var(--text); background: var(--s1); }
+  .nav-run { margin-left: auto; font-size: 11px; font-family: monospace; color: var(--muted); }
+
+  /* LAYOUT */
+  main { max-width: 1120px; margin: 0 auto; padding: 24px 24px 48px; }
+
+  /* WARN BANNER */
+  .warn-banner {
+    display: flex; gap: 10px; align-items: flex-start;
+    background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.2);
+    border-radius: var(--radius); padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #FCD34D;
+  }
+  .warn-icon { flex-shrink: 0; }
+
+  /* HERO BAND */
+  .hero-band {
+    display: flex; gap: 28px; align-items: flex-start;
+    background: linear-gradient(135deg, #111116 0%, #18181B 100%);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px 32px; margin-bottom: 28px;
+  }
+  .hero-left { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
+  .score-ring {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 3px solid var(--sc, var(--muted));
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.3);
+  }
+  .score-num  { font-size: 26px; font-weight: 800; color: var(--sc, var(--muted)); line-height: 1; }
+  .score-denom { font-size: 10px; color: var(--muted); }
+  .score-verdict { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .hero-right { flex: 1; min-width: 0; }
+  .hero-title { font-size: 20px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 4px; }
+  .hero-meta  { font-size: 12px; color: var(--text-sec); margin-bottom: 16px; }
+  .hero-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat-pill {
+    display: flex; align-items: baseline; gap: 5px;
+    background: var(--s2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 12px;
+  }
+  .stat-pill.red   { background: rgba(244,63,94,.08);  border-color: rgba(244,63,94,.25); }
+  .stat-pill.amber { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.25); }
+  .stat-pill.muted { opacity: .7; }
+  .stat-val { font-size: 14px; font-weight: 700; }
+  .stat-lbl { font-size: 11px; color: var(--text-sec); }
+  .dim-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .dim-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; padding: 3px 10px;
+    border: 1px solid; border-radius: 999px; cursor: default;
+    letter-spacing: .01em;
+  }
+  .dim-chip-icon { font-size: 10px; }
+  .dim-chip-score { opacity: .7; }
+
+  /* SECTION HEADER */
+  section { margin-bottom: 32px; }
+  .section-header {
+    display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px;
+  }
+  .section-header h2 { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  .section-sub { font-size: 12px; color: var(--muted); }
+
+  /* SCREEN CARD */
+  .screen-card {
+    border: 1px solid var(--border); border-left: 3px solid var(--border-color, var(--border));
+    border-radius: var(--radius); background: var(--s1);
+    margin-bottom: 10px; overflow: hidden;
+    transition: border-color .2s;
+  }
+  .screen-card:hover { border-color: var(--border-md); border-left-color: var(--border-color, var(--border-md)); }
+
+  .card-header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px; cursor: pointer; user-select: none;
+  }
+  .card-header:hover { background: rgba(255,255,255,.02); }
+  .card-thumb {
+    width: 96px; height: 60px; object-fit: cover; object-position: top;
+    border-radius: 5px; flex-shrink: 0; border: 1px solid var(--border);
+  }
+  .card-thumb-empty {
+    width: 96px; height: 60px; border-radius: 5px; flex-shrink: 0;
+    border: 1px dashed var(--border); background: var(--s2);
+  }
+  .card-meta { flex: 1; min-width: 0; }
+  .card-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-frame { font-size: 11px; color: var(--text-sec); margin-top: 2px; }
+  .card-summary { font-size: 11px; color: var(--text-sec); margin-top: 5px; line-height: 1.5;
+                  border-left: 2px solid var(--blue); padding-left: 7px; }
+  .card-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .match-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px;
+  }
+  .match-badge.matched  { background: rgba(16,185,129,.12); color: #34D399; border: 1px solid rgba(16,185,129,.25); }
+  .match-badge.review   { background: rgba(245,158,11,.12); color: #FCD34D; border: 1px solid rgba(245,158,11,.25); }
+  .match-badge.unmatched{ background: rgba(244,63,94,.12);  color: #FDA4AF; border: 1px solid rgba(244,63,94,.25); }
+  .score-badge {
+    display: flex; align-items: baseline; gap: 1px;
+    border: 2px solid var(--sc, var(--muted));
+    border-radius: 8px; padding: 3px 8px;
+  }
+  .sb-num  { font-size: 15px; font-weight: 800; color: var(--sc, var(--muted)); }
+  .sb-den  { font-size: 9px; color: var(--muted); }
+  .card-chevron { font-size: 13px; color: var(--muted); transition: transform .2s; }
+  .card-chevron.open { transform: rotate(180deg); }
+
+  /* CARD BODY */
+  .card-body { border-top: 1px solid var(--border); padding: 0 16px 14px; }
+
+  /* DIMENSION ROWS */
+  .dim-row {
+    display: flex; flex-direction: column;
+    border-left: 2px solid transparent; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    margin: 10px 0; padding: 8px 10px;
+  }
+  .dim-row.failing { }
+  .dim-row-header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .dim-status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .dim-label { font-size: 12px; font-weight: 700; color: var(--text); }
+  .dim-score { font-size: 12px; font-weight: 700; }
+  .dim-notes { font-size: 12px; color: var(--text-sec); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dim-issues { list-style: none; margin-top: 6px; padding-left: 14px; }
+  .dim-issues li {
+    font-size: 12px; color: var(--text-sec); padding: 2px 0;
+    border-left: 1px solid var(--border); padding-left: 10px; margin-bottom: 2px;
+  }
+  .dim-issues li::before { content: "·  "; color: var(--muted); }
+
+  /* PASSING ROW */
+  .dim-row.passing {
+    display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px;
+    margin-top: 10px; padding: 8px 0; border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  .pass-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--text-sec);
+    background: rgba(16,185,129,.06); border: 1px solid rgba(16,185,129,.15);
+    border-radius: 999px; padding: 2px 10px;
+  }
+  .pass-dot { color: var(--green); font-size: 10px; }
+  .pass-score { color: var(--green); font-weight: 700; }
+
+  /* NO ANALYSIS */
+  .no-analysis { font-size: 12px; color: var(--muted); padding: 12px 0; }
+
+  /* CARD TOGGLES */
+  .card-toggles { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .toggle-btn {
+    font-size: 11px; font-weight: 600; color: var(--text-sec);
+    background: var(--s2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 4px 12px; cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .toggle-btn:hover, .toggle-btn.active {
+    color: var(--text); border-color: var(--border-md); background: var(--s2);
+  }
+
+  /* INLINE PANELS */
+  .inline-panel { margin-top: 12px; }
+  .ss-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .ss-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+  .ss-img { width: 100%; border-radius: 6px; display: block; border: 1px solid var(--border); }
+  .live-img  { border-color: rgba(59,130,246,.4); }
+  .figma-img { border-color: rgba(16,185,129,.4); background: #fff; }
+  .ss-empty  { display: flex; align-items: center; justify-content: center; height: 120px; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); font-size: 12px; }
+  .form-badge {
+    margin-top: 8px; font-size: 11px; color: #6EE7B7;
+    background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.2);
+    border-radius: var(--radius-sm); padding: 6px 10px;
+  }
+
+  /* CSS TABLE */
+  .css-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .css-table th { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+  .css-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .css-table tr:last-child td { border-bottom: none; }
+  .css-el   { font-weight: 600; color: var(--text); }
+  .css-prop { font-family: monospace; color: var(--text-sec); }
+  .css-live { font-family: monospace; color: #93C5FD; }
+  .css-figma{ font-family: monospace; color: #6EE7B7; }
+  .sev-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+
+  /* UNMATCHED NOTE */
+  .unmatched-note {
+    font-size: 12px; color: var(--muted); padding: 10px 14px;
+    border: 1px dashed var(--border); border-radius: var(--radius-sm); margin-top: 8px;
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+
+  /* EMPTY */
+  .empty-msg { font-size: 13px; color: var(--muted); padding: 20px 0; }
+
+  /* ACCORDION */
+  .accordion {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--s1); margin-bottom: 8px; overflow: hidden;
+  }
+  .acc-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 18px; cursor: pointer; user-select: none;
+  }
+  .acc-header:hover { background: rgba(255,255,255,.02); }
+  .acc-title { font-size: 13px; font-weight: 700; }
+  .acc-meta  { font-size: 12px; color: var(--text-sec); flex: 1; }
+  .acc-chev  { font-size: 12px; color: var(--muted); transition: transform .2s; }
+  .acc-chev.open { transform: rotate(180deg); }
+  .acc-body  { display: none; padding: 0 18px 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+  .acc-body.open { display: block; }
+
+  /* FINDING ROW */
+  .finding-row {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 7px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 12px;
+  }
+  .finding-row.error { background: rgba(244,63,94,.07);  border-left: 2px solid var(--red); }
+  .finding-row.warn  { background: rgba(245,158,11,.07); border-left: 2px solid var(--amber); }
+  .finding-row.pass  { background: rgba(16,185,129,.06); border-left: 2px solid var(--green); }
+  .finding-cat { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-sec); white-space: nowrap; flex-shrink:0; }
+  .finding-msg { color: var(--text); flex: 1; }
+  .all-clear { font-size: 13px; color: var(--green); padding: 4px 0; }
+
+  /* STATUS TAGS */
+  .status-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; }
+  .status-tag.matched, .status-tag.pass    { background: rgba(16,185,129,.12); color: #34D399; }
+  .status-tag.review,  .status-tag.partial { background: rgba(245,158,11,.12); color: #FCD34D; }
+  .status-tag.unmatched,.status-tag.fail   { background: rgba(244,63,94,.12);  color: #FDA4AF; }
+
+  /* SUB SECTION LABEL */
+  .sub-section-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+
+  /* RUN TABLE */
+  .run-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .run-table th { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 500; color: var(--muted); padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+  .run-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text); }
+  .run-table tr:last-child td { border-bottom: none; }
+
+  /* META GRID */
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  .meta-item { background: var(--s2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .meta-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 4px; }
+  .meta-val { font-size: 13px; font-weight: 600; color: var(--text); word-break: break-all; }
+
+  /* FOOTER */
+  .page-footer { text-align: center; font-size: 11px; color: var(--muted); padding: 20px 24px 32px; }
+`;
+
+// ─── JS ───────────────────────────────────────────────────────────────────────
+
+const JS = `
+  // Card toggle
+  function toggleCard(id) {
+    const body = document.getElementById('body-' + id);
+    const chev = document.getElementById('chev-' + id);
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    if (chev) chev.classList.toggle('open', !open);
+  }
+
+  // Inline panel toggle (screenshots / CSS)
+  function togglePanel(id, btn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const open = el.style.display !== 'none';
+    el.style.display = open ? 'none' : 'block';
+    btn.classList.toggle('active', !open);
+  }
+
+  // Accordion toggle
+  function toggleAcc(header) {
+    const body = header.nextElementSibling;
+    const chev = header.querySelector('.acc-chev');
+    if (!body) return;
+    const open = body.classList.contains('open');
+    body.classList.toggle('open', !open);
+    if (chev) chev.classList.toggle('open', !open);
+  }
+
+  // Nav active link on scroll
+  const navLinks = document.querySelectorAll('.nav-links a');
+  const sections = document.querySelectorAll('section[id], .hero-band[id]');
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
+      }
+    });
+  }, { rootMargin: '-30% 0px -65% 0px' });
+  sections.forEach(s => io.observe(s));
+`;
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+
+function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c =>
-    ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }

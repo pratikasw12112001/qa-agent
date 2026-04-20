@@ -40,6 +40,7 @@ const BLOCKED_URL_RE = /\/(login|signin|auth|logout|terms|privacy|legal|cookie)/
 
 export async function exploreStates({
   liveUrl, sessionPath, maxStates = 60, maxDepth = 4, waitAfterClickMs = 1200,
+  prdHints = { screens: [], actions: [] },
 }) {
   const email    = process.env.LOGIN_EMAIL;
   const password = process.env.LOGIN_PASSWORD;
@@ -67,6 +68,10 @@ export async function exploreStates({
     if (await detectLoginPage(page)) throw new Error("Explorer re-login failed");
     console.log(`   → authenticated, url: ${page.url()}`);
   }
+
+  const prdActions  = (prdHints.actions || []).map((a) => a.toLowerCase());
+  const prdScreens  = (prdHints.screens || []).map((s) => s.toLowerCase());
+  if (prdActions.length) console.log(`   PRD hints: ${prdActions.length} action(s), ${prdScreens.length} screen(s) — will prioritize matching elements`);
 
   const states      = [];
   const seenHashes  = new Set();
@@ -143,6 +148,13 @@ export async function exploreStates({
     await page.waitForTimeout(300);
 
     const clickables = await collectClickables(page);
+
+    // Sort: PRD-action-matching elements first so they're explored before the budget runs out
+    if (prdActions.length) {
+      clickables.sort((a, b) => prdClickScore(b.text, prdActions) - prdClickScore(a.text, prdActions));
+      const boosted = clickables.filter((c) => prdClickScore(c.text, prdActions) > 0);
+      if (boosted.length) console.log(`   → PRD-boosted: ${boosted.slice(0,3).map((c) => `"${c.text}"`).join(", ")}${boosted.length > 3 ? ` +${boosted.length - 3} more` : ""}`);
+    }
     console.log(`   → state ${parent.id}: ${clickables.length} clickable candidates`);
 
     // Dedup key includes the entry-click path so overlay items are treated separately
@@ -214,8 +226,17 @@ export async function exploreStates({
         });
         states.push(newState);
         seenHashes.add(newState.hash);
-        queue.push({ stateId: newState.id, depth: depth + 1 });
-        console.log(`     + ${newState.id} via click "${truncate(el.text, 40)}" (${urlChanged ? "nav" : "overlay → will explore inside"})`);
+
+        // PRD screen match → push to FRONT of BFS queue so it gets explored next
+        // before unrelated states consume the maxStates budget
+        const prdPriority = prdScreens.length && matchesPrdScreen(newState, prdScreens);
+        if (prdPriority) {
+          queue.unshift({ stateId: newState.id, depth: depth + 1 });
+          console.log(`     + ${newState.id} via click "${truncate(el.text, 40)}" ← PRD screen match ("${prdPriority}") — front-queued`);
+        } else {
+          queue.push({ stateId: newState.id, depth: depth + 1 });
+          console.log(`     + ${newState.id} via click "${truncate(el.text, 40)}" (${urlChanged ? "nav" : "overlay → will explore inside"})`);
+        }
 
         // ── Form interaction: if this state has a form, fill and submit ──────
         if (states.length < maxStates && depth + 1 < maxDepth) {
@@ -274,6 +295,53 @@ export async function exploreStates({
   await browser.close();
   console.log(`   → ${states.length} unique state(s) captured`);
   return states;
+}
+
+// ─── PRD hint helpers ────────────────────────────────────────────────────────
+
+/**
+ * Score how well a clickable element's text matches any PRD action.
+ * Returns 0–1; higher = stronger match.
+ */
+function prdClickScore(text, prdActions) {
+  if (!text || !prdActions.length) return 0;
+  const norm = text.toLowerCase();
+  let best = 0;
+  for (const action of prdActions) {
+    // Direct inclusion check (fast path)
+    if (norm.includes(action) || action.includes(norm)) { best = 1; break; }
+    // Token overlap
+    const score = _tokenOverlap(norm, action);
+    if (score > best) best = score;
+  }
+  return best;
+}
+
+/**
+ * Returns the first PRD screen name (string) that matches this state,
+ * or null if none match.
+ * Matches against: URL path tokens and captured text headings.
+ */
+function matchesPrdScreen(state, prdScreens) {
+  const urlNorm  = (state.url || "").toLowerCase().replace(/[^a-z0-9]/g, " ");
+  const textBlob = (state.textContent || []).slice(0, 20).join(" ").toLowerCase();
+  for (const screen of prdScreens) {
+    if (_tokenOverlap(urlNorm, screen)  >= 0.5) return screen;
+    if (_tokenOverlap(textBlob, screen) >= 0.5) return screen;
+    // Fallback: every word in the screen name appears somewhere in the text
+    const words = screen.split(/\s+/).filter((w) => w.length > 2);
+    if (words.length && words.every((w) => textBlob.includes(w))) return screen;
+  }
+  return null;
+}
+
+function _tokenOverlap(a, b) {
+  const ta = new Set(a.split(/\s+/).filter((w) => w.length > 2));
+  const tb = new Set(b.split(/\s+/).filter((w) => w.length > 2));
+  if (!ta.size || !tb.size) return 0;
+  let hits = 0;
+  for (const w of ta) if (tb.has(w)) hits++;
+  return hits / Math.min(ta.size, tb.size);
 }
 
 // ─── collectClickables ──────────────────────────────────────────────────────

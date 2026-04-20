@@ -400,11 +400,19 @@ async function visionAnalysis(liveB64, figmaB64, frameName) {
     `    "componentStyling":   { "score": 0-100, "status": "matches|partial|deviates", "notes": "<button styles, input styles, table styles, card borders, radius>", "issues": [] },`,
     `    "iconsAssets":        { "score": 0-100, "status": "matches|partial|deviates", "notes": "<icon presence, size, style, image assets>", "issues": [] },`,
     `    "interactionsStates": { "score": 0-100, "status": "matches|partial|deviates", "notes": "<hover/active/disabled states, loading, empty states, dropdowns>", "issues": [] },`,
-    `    "contentAccuracy":    { "score": 0-100, "status": "matches|partial|deviates", "notes": "<labels, placeholders, error messages, copy, data format>", "issues": [] }`,
+    `    "contentAccuracy":    { "score": 0-100, "status": "matches|partial|deviates", "notes": "<static UI copy only — see rules below>", "issues": [] }`,
     `  }`,
     `}`,
-    `Limit issues[] to max 4 per dimension. Ignore dynamic data (user names, dates, row counts). `,
-    `Use "matches" only when score >= 80. Use "deviates" when score < 50.`,
+    ``,
+    `CONTENT ACCURACY rules — this dimension evaluates ONLY static UI copy that is defined by designers/developers:`,
+    `  IN SCOPE:  button labels, navigation items, form field labels, placeholder text, empty-state messages,`,
+    `             error/validation messages, section headings, tooltip copy, helper text, modal titles.`,
+    `  OUT OF SCOPE (ignore completely):  any user-generated content such as record names, row data, dates,`,
+    `             IDs, counts, dashboard metric values, table cell content, or anything a user could have`,
+    `             typed/created. If the live app shows "Project Alpha" but Figma shows "Project Name",`,
+    `             that is NOT a deviation — the design used placeholder data.`,
+    ``,
+    `Limit issues[] to max 4 per dimension. Use "matches" only when score >= 80. Use "deviates" when score < 50.`,
   ].join("\n");
 
   const raw = await askVision(system, user, [

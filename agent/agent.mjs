@@ -3,11 +3,12 @@
  *
  *   1. Fetch Figma frames        (figma.mjs)   ← optional, skipped if API unavailable
  *   2. Login to live app         (auth.mjs)
- *   3. Explore UI states         (explorer.mjs) ← sidebar excluded
+ *   2.5 PRD pre-load             (prd.mjs)     ← extract screens+actions BEFORE exploration
+ *   3. Explore UI states         (explorer.mjs) ← PRD hints guide click priority + queue order
  *   4. Match states to frames    (matcher.mjs)  ← skipped if no Figma frames
  *   5. Compare matched pairs     (compare.mjs)  ← skipped if no matches
  *   6. Functional tests          (functional.mjs)
- *   7. PRD AC checking           (prd.mjs)
+ *   7. PRD AC checking           (prd.mjs)      ← AC check + coverage gaps (needs states)
  *   8. Generate HTML report      (report.mjs)
  *
  * The agent always produces report.html — Figma steps are best-effort.
@@ -110,11 +111,30 @@ async function main() {
   console.log("\n▶  Logging into live app");
   await loginAndCaptureSession({ liveUrl: cfg.liveUrl, sessionPath: cfg.sessionPath });
 
+  // ── 2.5. PRD pre-load — extract navigation hints BEFORE exploration ──────
+  let prdText    = null;
+  let prdHints   = { screens: [], actions: [] };
+
+  if (cfg.prdPdfPath && existsSync(cfg.prdPdfPath)) {
+    console.log("\n▶  PRD pre-load (navigation hints)");
+    try {
+      prdText  = await loadPrd(cfg.prdPdfPath);
+      if (prdText) {
+        prdHints = await extractScreensAndActions(prdText);
+        console.log(`   → ${prdHints.screens.length} expected screen(s): ${prdHints.screens.slice(0,5).join(", ")}${prdHints.screens.length > 5 ? "…" : ""}`);
+        console.log(`   → ${prdHints.actions.length} expected action(s): ${prdHints.actions.slice(0,5).join(", ")}${prdHints.actions.length > 5 ? "…" : ""}`);
+      }
+    } catch (e) {
+      console.warn(`   ⚠ PRD pre-load failed — exploring without hints: ${e.message.slice(0, 100)}`);
+    }
+  }
+
   // ── 3. Explore states ─────────────────────────────────────────────────────
   console.log("\n▶  Exploring UI states (sidebar excluded)");
   const states = await exploreStates({
     liveUrl: cfg.liveUrl, sessionPath: cfg.sessionPath,
     ...thresholds.exploration,
+    prdHints,
   });
 
   // ── 4. Match states to frames ─────────────────────────────────────────────
@@ -179,26 +199,23 @@ async function main() {
   let prdAcs       = [];
   let coverageGaps = { missingScreens: [], untestedActions: [] };
 
-  if (cfg.prdPdfPath && existsSync(cfg.prdPdfPath)) {
-    console.log("\n▶  PRD analysis");
+  if (prdText) {
+    console.log("\n▶  PRD analysis (AC check + coverage gaps)");
     try {
-      const prdText = await loadPrd(cfg.prdPdfPath);
-      if (prdText) {
-        // Acceptance criteria
-        const criteria = await extractAcceptanceCriteria(prdText);
-        console.log(`   → ${criteria?.length ?? 0} acceptance criteria`);
-        prdAcs = await checkAcceptanceCriteria({ criteria, states, matches });
-        const pass = prdAcs.filter((a) => a.status === "pass").length;
-        console.log(`   → AC: ${pass}/${prdAcs.length} passed`);
+      // Acceptance criteria check
+      const criteria = await extractAcceptanceCriteria(prdText);
+      console.log(`   → ${criteria?.length ?? 0} acceptance criteria`);
+      prdAcs = await checkAcceptanceCriteria({ criteria, states, matches });
+      const pass = prdAcs.filter((a) => a.status === "pass").length;
+      console.log(`   → AC: ${pass}/${prdAcs.length} passed`);
 
-        // Coverage gaps: PRD-mentioned screens & actions vs what was captured
-        const { screens, actions } = await extractScreensAndActions(prdText);
-        console.log(`   → PRD expects ${screens.length} screen(s), ${actions.length} action(s)`);
-        coverageGaps = await detectCoverageGaps({ expectedScreens: screens, expectedActions: actions, states, matches });
-        console.log(`   → Coverage gaps: ${coverageGaps.missingScreens.length} missing screen(s), ${coverageGaps.untestedActions.length} untested action(s)`);
-      } else {
-        console.log("   → PDF could not be parsed, skipping");
-      }
+      // Coverage gaps — reuse prdHints.screens/actions extracted in step 2.5
+      coverageGaps = await detectCoverageGaps({
+        expectedScreens: prdHints.screens,
+        expectedActions: prdHints.actions,
+        states, matches,
+      });
+      console.log(`   → Coverage gaps: ${coverageGaps.missingScreens.length} missing screen(s), ${coverageGaps.untestedActions.length} untested action(s)`);
     } catch (e) {
       console.warn(`   ⚠ PRD analysis failed: ${e.message.slice(0, 100)}`);
       warnings.push({ step: "PRD", message: e.message });
