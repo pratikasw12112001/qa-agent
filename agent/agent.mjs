@@ -46,6 +46,7 @@ const cfg = {
   startingFrameId: process.env.STARTING_FRAME_ID
     ? normalizeNodeId(process.env.STARTING_FRAME_ID)
     : null,
+  figmaPageName:   process.env.FIGMA_PAGE_NAME || null,
   sessionPath:     resolve(process.env.SESSION_PATH ?? "./sessions/session.json"),
   outDir:          resolve(process.env.OUT_DIR ?? "./reports"),
   runId:           process.env.RUN_ID ?? Date.now().toString(),
@@ -90,7 +91,7 @@ async function main() {
   if (cfg.figmaToken && cfg.figmaFileUrl) {
     console.log("▶  Fetching Figma frames");
     try {
-      const result = await fetchFrames(cfg.figmaFileUrl, cfg.figmaToken);
+      const result = await fetchFrames(cfg.figmaFileUrl, cfg.figmaToken, cfg.figmaPageName);
       fileKey            = result.fileKey;
       frames             = result.frames;
       flowStartingPoints = result.flowStartingPoints ?? [];

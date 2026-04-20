@@ -19,13 +19,15 @@ export default function HomePage() {
     const figmaUrl      = (form.elements.namedItem("figmaUrl")      as HTMLInputElement).value.trim();
     const liveUrl       = (form.elements.namedItem("liveUrl")       as HTMLInputElement).value.trim();
     const startingFrame = (form.elements.namedItem("startingFrame") as HTMLInputElement).value.trim();
+    const figmaPageName = (form.elements.namedItem("figmaPageName") as HTMLInputElement).value.trim();
     const file = fileRef.current?.files?.[0];
 
     try {
       const fd = new FormData();
       fd.append("figmaUrl", figmaUrl);
       fd.append("liveUrl", liveUrl);
-      if (startingFrame) fd.append("startingFrame", startingFrame);
+      if (startingFrame)  fd.append("startingFrame", startingFrame);
+      if (figmaPageName)  fd.append("figmaPageName", figmaPageName);
       if (file) fd.append("prd", file);
 
       const res = await fetch("/api/run", { method: "POST", body: fd });
@@ -56,7 +58,23 @@ export default function HomePage() {
           <div>
             <label style={label}>Figma File URL</label>
             <input name="figmaUrl" required placeholder="https://www.figma.com/design/…" style={input} />
-            <p style={hint}>Paste the file URL — all frames will be auto-detected</p>
+            <p style={hint}>
+              For page-specific matching: copy the URL from your browser <strong>while on the target page</strong> in Figma (it will include <code>?page-id=…</code> automatically).
+            </p>
+          </div>
+
+          <div>
+            <label style={label}>
+              Figma Page Name <span style={{ color: "#94a3b8", fontWeight: 400 }}>(optional — filters to one page)</span>
+            </label>
+            <input
+              name="figmaPageName"
+              placeholder="e.g. Logbook, Dashboard, Homepage"
+              style={input}
+            />
+            <p style={hint}>
+              If your URL has no page-id, enter the exact Figma page name to avoid comparing frames from unrelated pages.
+            </p>
           </div>
 
           <div>

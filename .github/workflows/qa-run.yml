@@ -89,6 +89,7 @@ jobs:
           GH_CACHE_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO:       pratikasw12112001/qa-agent
           STARTING_FRAME_ID: ${{ github.event.client_payload.startingFrameId || '' }}
+          FIGMA_PAGE_NAME:   ${{ github.event.client_payload.figmaPageName || '' }}
           CI: "true"
         run: node agent.mjs
 

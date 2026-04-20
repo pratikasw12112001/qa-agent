@@ -141,15 +141,24 @@ async function writeGhPagesCache(fileKey, data) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export async function fetchFrames(figmaUrl, token) {
-  const fileKey    = extractFileKey(figmaUrl);
+export async function fetchFrames(figmaUrl, token, pageNameFilter = null) {
+  const fileKey      = extractFileKey(figmaUrl);
   const pageIdFilter = extractPageId(figmaUrl);   // null = all design pages
+  const pageNameNorm = pageNameFilter ? pageNameFilter.trim().toLowerCase() : null;
+
   if (pageIdFilter) {
     console.log(`   Scoping to page-id: ${pageIdFilter} (from URL)`);
+  } else if (pageNameNorm) {
+    console.log(`   Scoping to page name: "${pageNameFilter}" (from input)`);
   }
 
   // Cache key includes page scope so different pages don't collide
-  const cacheKey = pageIdFilter ? `${fileKey}--${pageIdFilter.replace(/:/g, "_")}` : fileKey;
+  const pageSuffix = pageIdFilter
+    ? `--${pageIdFilter.replace(/:/g, "_")}`
+    : pageNameNorm
+      ? `--name-${pageNameNorm.replace(/[^a-z0-9]/g, "_")}`
+      : "";
+  const cacheKey = `${fileKey}${pageSuffix}`;
 
   // 1. Check gh-pages persistent cache first
   const ghCache = await readGhPagesCache(cacheKey);
@@ -179,12 +188,21 @@ export async function fetchFrames(figmaUrl, token) {
   const flowStartingPoints  = [];   // prototype flow entry frames
 
   for (const page of stage1Data.document.children ?? []) {
-    // If the URL scopes to a specific page, skip all others
+    // Filter by page-id (from URL) — exact match
     if (pageIdFilter && page.id !== pageIdFilter) {
-      console.log(`   Skipping page "${page.name}" (not the scoped page)`);
+      console.log(`   Skipping page "${page.name}" (not the scoped page-id)`);
       continue;
     }
-    if (!pageIdFilter && SKIP_PAGE_RE.test(page.name.trim())) {
+    // Filter by page name (from user input) — case-insensitive partial match
+    if (!pageIdFilter && pageNameNorm) {
+      const thisPageNorm = page.name.trim().toLowerCase();
+      if (!thisPageNorm.includes(pageNameNorm) && !pageNameNorm.includes(thisPageNorm)) {
+        console.log(`   Skipping page "${page.name}" (doesn't match "${pageNameFilter}")`);
+        continue;
+      }
+    }
+    // Skip known non-design pages when no scope is given
+    if (!pageIdFilter && !pageNameNorm && SKIP_PAGE_RE.test(page.name.trim())) {
       console.log(`   Skipping non-design page: "${page.name}"`);
       continue;
     }

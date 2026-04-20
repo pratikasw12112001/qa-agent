@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     const figmaUrl      = String(form.get("figmaUrl")      || "").trim();
     const liveUrl       = String(form.get("liveUrl")       || "").trim();
     const startingFrame = String(form.get("startingFrame") || "").trim();
+    const figmaPageName = String(form.get("figmaPageName") || "").trim();
     const prd           = form.get("prd") as File | null;
 
     if (!figmaUrl || !liveUrl) {
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         event_type: "qa-run",
-        client_payload: { runId, figmaUrl, liveUrl, prdUrl, startingFrameId },
+        client_payload: { runId, figmaUrl, liveUrl, prdUrl, startingFrameId, figmaPageName },
       }),
     });
     if (!dispatchRes.ok) {
