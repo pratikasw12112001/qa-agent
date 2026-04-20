@@ -394,7 +394,8 @@ async function collectClickables(page) {
 async function captureState(page, meta) {
   // Wait briefly for any pending renders
   await page.waitForTimeout(400);
-  const screenshot  = await page.screenshot({ fullPage: false, type: "png" });
+  // JPEG at 75% quality keeps screenshots small (target ~100KB vs ~1MB PNG)
+  const screenshot  = await page.screenshot({ fullPage: false, type: "jpeg", quality: 75 });
   const dom         = await page.evaluate(extractDom);
   const hash = createHash("sha256")
     .update(meta.url)

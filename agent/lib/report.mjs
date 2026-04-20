@@ -32,6 +32,11 @@ export function generateReport({
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
        background:var(--bg);color:var(--text);line-height:1.5;}
   .wrap{max-width:1140px;margin:0 auto;padding:20px 24px;}
+  /* Issue filter buttons */
+  .ifl{background:var(--panel2);border:1px solid var(--border);border-radius:20px;
+       color:var(--muted);font-size:11px;font-weight:600;padding:4px 12px;cursor:pointer;}
+  .ifl:hover{border-color:var(--blue);color:var(--text);}
+  .ifl.on{background:var(--blue);border-color:var(--blue);color:#fff;}
 
   /* Nav */
   #nav{position:sticky;top:0;z-index:100;background:rgba(11,15,26,.96);backdrop-filter:blur(8px);
@@ -193,11 +198,19 @@ ${hasIssues ? `
 <section id="issues" class="shut">
   <div class="sec-hd">
     <h2>Issues <span class="aud">QA / Designer</span>
-      <span style="font-size:12px;font-weight:400;color:var(--muted);">&nbsp;${score.errors} error${score.errors!==1?"s":""} · ${score.warns} warning${score.warns!==1?"s":""}</span>
+      <span style="font-size:12px;font-weight:400;color:var(--muted);">&nbsp;${findings.filter(f=>f.severity==="error").length} errors · ${findings.filter(f=>f.severity==="warn").length} warnings</span>
     </h2>
     <span class="tog">▾</span>
   </div>
-  <div class="sec-body">${renderAllIssues(findings, states)}</div>
+  <div class="sec-body">
+    <div id="issue-filters" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="ifl on" data-f="all">All</button>
+      <button class="ifl" data-f="error">Errors</button>
+      <button class="ifl" data-f="warn">Warnings</button>
+      ${[...new Set(findings.map(f=>f.category).filter(Boolean))].map(c=>`<button class="ifl" data-f="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("")}
+    </div>
+    <div id="issue-list">${renderAllIssues(findings, states)}</div>
+  </div>
 </section>` : ""}
 
 <!-- SECTION 3: FUNCTIONAL + A11Y CHECKS -->
@@ -264,6 +277,21 @@ ${hasChecks ? `
     });
   }, { rootMargin:"-40% 0px -55% 0px" });
   document.querySelectorAll("section[id]").forEach(s => obs.observe(s));
+
+  // Issue filters
+  document.querySelectorAll(".ifl").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".ifl").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      const f = btn.dataset.f;
+      document.querySelectorAll("#issue-list .finding").forEach(el => {
+        if (f === "all") { el.style.display = ""; return; }
+        const matchSev = el.classList.contains(f);
+        const matchCat = el.querySelector(".f-head")?.textContent?.toLowerCase().startsWith(f.toLowerCase());
+        el.style.display = (matchSev || matchCat) ? "" : "none";
+      });
+    });
+  });
 </script>
 </body></html>`;
 }
@@ -281,11 +309,21 @@ const DIM_META = {
 };
 
 function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
-  // Only show matched + review states as full cards
-  const relevant = states.filter(s => {
-    const m = matches.find(x => x.stateId === s.id);
-    return m && (m.status === "matched" || m.status === "review");
-  });
+  // Only show matched + review states as full cards, sorted worst fidelity first
+  const relevant = states
+    .filter(s => {
+      const m = matches.find(x => x.stateId === s.id);
+      return m && (m.status === "matched" || m.status === "review");
+    })
+    .sort((a, b) => {
+      const fa = frameAnalyses.find(x => x.stateId === a.id);
+      const fb = frameAnalyses.find(x => x.stateId === b.id);
+      const sa = fa?.frameScore ?? 50;
+      const sb = fb?.frameScore ?? 50;
+      const ea = allFindings.filter(f => f.stateId === a.id && f.severity === "error").length;
+      const eb = allFindings.filter(f => f.stateId === b.id && f.severity === "error").length;
+      return (sa - ea * 10) - (sb - eb * 10);
+    });
   if (!relevant.length) return `<p style="color:var(--muted);font-size:13px">No matched frames — check Figma URL and page scope.</p>`;
 
   return relevant.map(s => {
@@ -323,7 +361,7 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
     const liveImg = s.screenshot ? `
       <div>
         <div class="ss-label">Live · ${escapeHtml(s.url.replace(/^https?:\/\/[^/]+/, ""))}</div>
-        <img src="data:image/png;base64,${s.screenshot}" style="border:2px solid #3b82f6;" alt="live">
+        <img src="data:image/jpeg;base64,${s.screenshot}" style="border:2px solid #3b82f6;" alt="live">
       </div>` : "";
 
     const figmaImg = m?.framePng ? `
