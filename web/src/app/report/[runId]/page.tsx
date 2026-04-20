@@ -36,18 +36,23 @@ export default function ReportPage() {
   const done = progress.status === "done";
   const err  = progress.status === "error";
 
+  // Use the Vercel proxy route instead of GitHub Pages directly.
+  // GitHub Pages has a 1-3 min CDN propagation delay after gh-pages push;
+  // raw.githubusercontent.com reflects the commit immediately.
+  const proxyUrl = `/api/report/${runId}`;
+
   if (done && progress.reportUrl) {
     return (
-      <main style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#0b1020" }}>
+      <main style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#09090B" }}>
         <header style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "12px 20px", borderBottom: "1px solid #1e2640", background: "#0b1020",
+          padding: "12px 20px", borderBottom: "1px solid #27272A", background: "#09090B",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-            <a href="/" style={{ color: "#94a3b8", fontSize: "13px", textDecoration: "none" }}>← New run</a>
-            <span style={{ color: "#475569", fontSize: "13px" }}>|</span>
-            <span style={{ color: "#94a3b8", fontSize: "13px" }}>
-              Run <code style={{ background: "#111827", padding: "2px 6px", borderRadius: "4px" }}>{runId}</code>
+            <a href="/" style={{ color: "#A1A1AA", fontSize: "13px", textDecoration: "none" }}>← New run</a>
+            <span style={{ color: "#3F3F46", fontSize: "13px" }}>|</span>
+            <span style={{ color: "#A1A1AA", fontSize: "13px" }}>
+              Run <code style={{ background: "#18181B", padding: "2px 6px", borderRadius: "4px", fontSize: "12px" }}>{runId}</code>
             </span>
           </div>
           <a
@@ -60,8 +65,8 @@ export default function ReportPage() {
           </a>
         </header>
         <iframe
-          src={progress.reportUrl}
-          style={{ flex: 1, width: "100%", border: "none", background: "#fff" }}
+          src={proxyUrl}
+          style={{ flex: 1, width: "100%", border: "none", background: "#09090B" }}
           title={`QA Report ${runId}`}
         />
       </main>
