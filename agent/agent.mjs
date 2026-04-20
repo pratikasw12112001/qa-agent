@@ -67,7 +67,7 @@ function loadThresholds() {
   return {
     matching: { visualWeight: 0.6, textWeight: 0.25, structureWeight: 0.15, autoAssignScore: 0.7, reviewScore: 0.4, topCandidatesForVision: 5 },
     comparison: {},
-    exploration: { maxStates: 40, maxDepth: 4, waitAfterClickMs: 1200 },
+    exploration: { maxStates: 60, maxDepth: 4, waitAfterClickMs: 1200 },
   };
 }
 

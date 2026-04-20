@@ -3,7 +3,6 @@ export function generateReport({
   functional, prdAcs, coverageGaps = { missingScreens: [], untestedActions: [] },
   aiStats, warnings = [],
 }) {
-  const score = computeScore(findings, matches, functional);
   const now   = new Date().toISOString();
 
   const matched   = matches.filter((m) => m.status === "matched");
@@ -152,25 +151,17 @@ ${warnings.length ? `
 
 <!-- HERO -->
 <div class="hero">
-  <div class="hero-score">
-    <div class="big-score" style="color:${scoreColor(score.value)}">${score.value}</div>
-    <div class="score-label">/ 100</div>
-    <div class="verdict" style="color:${scoreColor(score.value)}">
-      ${score.noData ? "No data" : score.value >= 85 ? "✓ Solid" : score.value >= 65 ? "△ Needs review" : "✗ Significant gaps"}
-    </div>
-  </div>
-  <div class="hero-body">
+  <div class="hero-body" style="flex:1">
     <div class="hero-title">Frontend QA Report</div>
     <div class="hero-sub">${escapeHtml(meta.liveUrl)} · ${escapeHtml(now.slice(0,16).replace("T"," "))}</div>
-    <div class="chips">
-      ${score.errors ? `<span class="chip e">${score.errors} error${score.errors>1?"s":""}</span>` : ""}
-      ${score.warns  ? `<span class="chip w">${score.warns} warning${score.warns>1?"s":""}</span>`  : ""}
-      <span class="chip g">${matched.length} matched</span>
-      ${review.length    ? `<span class="chip w">${review.length} review</span>`    : ""}
+    <div class="chips" style="margin-top:10px">
+      ${findings.filter(f=>f.severity==="error").length ? `<span class="chip e">${findings.filter(f=>f.severity==="error").length} error${findings.filter(f=>f.severity==="error").length>1?"s":""}</span>` : ""}
+      ${findings.filter(f=>f.severity==="warn").length  ? `<span class="chip w">${findings.filter(f=>f.severity==="warn").length} warning${findings.filter(f=>f.severity==="warn").length>1?"s":""}</span>`  : ""}
+      <span class="chip g">${matched.length + review.length} frame${matched.length+review.length!==1?"s":""} compared</span>
       ${unmatched.length ? `<span class="chip i">${unmatched.length} unmatched</span>` : ""}
       <span class="chip i">${states.length} states explored</span>
+      ${frameAnalyses.length ? `<span class="chip g">avg fidelity ${Math.round(frameAnalyses.reduce((a,f)=>a+(f.frameScore??0),0)/frameAnalyses.length)}/100</span>` : ""}
     </div>
-    <div class="hero-explain">${scoreExplanation(score, states.length, matched.length, unmatched.length, frameAnalyses)}</div>
   </div>
 </div>
 
@@ -318,6 +309,16 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
       ? `<div style="font-size:11px;color:#cbd5e1;margin-top:4px;border-left:2px solid #3b82f6;padding-left:7px;line-height:1.5">${escapeHtml(fa.summary)}</div>`
       : "";
 
+    // Form interaction badge
+    const formBadge = s.formInteraction ? `
+      <div style="margin-top:5px;display:inline-flex;align-items:center;gap:6px;font-size:11px;
+                  background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);
+                  border-radius:6px;padding:3px 8px;color:#86efac">
+        <span>⌨ Form filled</span>
+        <span style="color:var(--muted)">${s.formInteraction.filled.map(f=>`${escapeHtml(f.field)}: "${escapeHtml(f.value)}"`).join(" · ")}</span>
+        ${s.formInteraction.submitted ? `<span style="color:#22c55e">→ submitted (${escapeHtml(s.formInteraction.submitLabel)})</span>` : `<span style="color:#eab308">→ not submitted</span>`}
+      </div>` : "";
+
     // TAB 1 — Screenshots
     const liveImg = s.screenshot ? `
       <div>
@@ -399,7 +400,7 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
           <button class="tb" data-t="dim">Dimensions</button>
           <button class="tb" data-t="iss">Issues${errs+warns>0?` (${errs+warns})`:""}</button>
         </div>
-        <div class="tp on" data-t="ss"><div class="ss-grid">${liveImg}${figmaImg}</div></div>
+        <div class="tp on" data-t="ss">${formBadge}<div class="ss-grid">${liveImg}${figmaImg}</div></div>
         <div class="tp" data-t="dim">${tabDimensions}</div>
         <div class="tp" data-t="iss">${tabIssues}</div>
       </div>
@@ -407,22 +408,36 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
   }).join("");
 }
 
-// ─── All Issues (flat list, sorted by severity) ───────────────────────────────
+// ─── All Issues (deduped + rolled up, sorted by severity) ────────────────────
 
 function renderAllIssues(findings, states) {
-  const sorted = [...findings].sort((a,b) => {
+  // Roll up duplicate descriptions across states
+  const groups = new Map(); // key → { finding, stateIds[] }
+  for (const f of findings) {
+    const key = `${f.category}||${f.severity}||${f.description}`;
+    if (!groups.has(key)) groups.set(key, { finding: f, stateIds: [] });
+    if (f.stateId) groups.get(key).stateIds.push(f.stateId);
+  }
+
+  const deduped = [...groups.values()].sort((a,b) => {
     const sev = { error:0, warn:1, info:2 };
-    return (sev[a.severity]??2) - (sev[b.severity]??2);
+    return (sev[a.finding.severity]??2) - (sev[b.finding.severity]??2);
   });
-  return sorted.map(f => {
-    const s = states.find(x => x.id === f.stateId);
+
+  return deduped.map(({ finding: f, stateIds }) => {
+    const count = stateIds.length;
+    const stateLabels = stateIds.slice(0,3).map(id => {
+      const s = states.find(x => x.id === id);
+      return s ? escapeHtml(s.triggerDesc) : id;
+    });
     return `
       <div class="finding ${f.severity}">
         <div class="f-head">${escapeHtml((f.category||"general").toUpperCase())} · ${f.severity}
-          ${s ? ` · <span style="color:var(--dim)">${escapeHtml(s.triggerDesc)}</span>` : ""}
+          ${count > 1 ? `<span style="background:rgba(255,255,255,.1);border-radius:4px;padding:1px 6px;margin-left:6px;font-size:10px">${count} states</span>` : ""}
         </div>
         <div class="f-desc">${escapeHtml(f.description)}</div>
-        ${f.evidence ? `<div style="color:var(--muted);font-size:11px;margin-top:3px">${escapeHtml(String(f.evidence))}</div>` : ""}
+        ${count > 1 ? `<div style="color:var(--muted);font-size:11px;margin-top:3px">Seen in: ${stateLabels.join(", ")}${count>3?` +${count-3} more`:""}</div>` : ""}
+        ${f.evidence && count === 1 ? `<div style="color:var(--muted);font-size:11px;margin-top:3px">${escapeHtml(String(f.evidence))}</div>` : ""}
       </div>`;
   }).join("");
 }
@@ -503,40 +518,6 @@ function renderDebug({ states, matches, prdAcs, coverageGaps, meta, aiStats, now
 
 // ─── Score helpers ────────────────────────────────────────────────────────────
 
-function computeScore(findings, matches, functional) {
-  const errs  = findings.filter(f => f.severity === "error").length
-              + (functional?.consoleErrors?.length ?? 0)
-              + (functional?.brokenLinks?.length ?? 0);
-  const warns = findings.filter(f => f.severity === "warn").length
-              + (functional?.formChecks?.length ?? 0);
-  const totalChecks = findings.length + (functional?.testedUrls?.length ?? 0) * 3;
-  if (totalChecks === 0) return { value: "N/A", noData: true, errors: errs, warns };
-  const raw = 100 - Math.min(100, errs * 5 + warns * 2);
-  return { value: Math.max(0, Math.round(raw)), noData: false, errors: errs, warns };
-}
-
-function scoreColor(v) {
-  if (v === "N/A") return "#f97316";
-  if (v >= 85) return "#22c55e";
-  if (v >= 65) return "#eab308";
-  return "#ef4444";
-}
-
-function scoreExplanation(score, stateCount, matchedCount, unmatchedCount, frameAnalyses) {
-  if (score.noData) return "Not enough data to compute a score.";
-  const parts = [];
-  if (score.value >= 85)      parts.push("Implementation closely matches the designs.");
-  else if (score.value >= 65) parts.push("Generally aligned with notable gaps to address.");
-  else                        parts.push("Significant deviations found — review before release.");
-  parts.push(`${stateCount} states explored, ${matchedCount} matched to Figma.`);
-  if (unmatchedCount) parts.push(`${unmatchedCount} states had no matching frame.`);
-  if (score.errors)   parts.push(`${score.errors} critical error${score.errors>1?"s":""} need attention.`);
-  if (frameAnalyses.length) {
-    const avg = Math.round(frameAnalyses.reduce((a,fa) => a+(fa.frameScore??0), 0) / frameAnalyses.length);
-    parts.push(`Avg frame fidelity: ${avg}/100.`);
-  }
-  return parts.join(" ");
-}
 
 // ─── Run Logs ─────────────────────────────────────────────────────────────────
 

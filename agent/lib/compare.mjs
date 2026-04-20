@@ -66,16 +66,34 @@ export async function compareStateToFrame({ state, match, frame }) {
   return { findings, analysis };
 }
 
-// ─── presence checks ────────────────────────────────────────────────────────
+// ─── presence checks (lenient) ───────────────────────────────────────────────
+// Only flags meaningful multi-word content — not single labels, ALL-CAPS headings,
+// or UI chrome that legitimately varies between design and live.
 
 function presenceChecks(state, frame) {
   const findings = [];
   const liveTexts = new Set(
     (state.textContent || []).map((s) => String(s).toLowerCase().replace(/\s+/g, " ").trim())
   );
+
+  // Filter Figma texts to only significant content:
+  // - Must have at least 2 words (a space) → filters out single labels
+  // - Min 8 chars, max 120 chars
+  // - Skip ALL CAPS (design labels, section headers)
+  // - Skip strings ending in ":" (form field labels like "Name:", "Email:")
+  // - Skip placeholder-style text like "[Name]" or "(optional)"
   const figmaTexts = (frame.textContent || [])
     .map((s) => String(s).trim())
-    .filter((s) => s.length > 2 && s.length < 80);
+    .filter((s) => {
+      if (s.length < 8 || s.length > 120) return false;
+      if (!/\s/.test(s)) return false;                      // must have 2+ words
+      if (/^[A-Z0-9\s\/\-&]+$/.test(s)) return false;      // skip ALL CAPS
+      if (s.endsWith(":")) return false;                     // skip "Label:" style
+      if (/^\[.*\]$/.test(s) || /^\(.*\)$/.test(s)) return false; // skip [placeholder]
+      return true;
+    });
+
+  if (figmaTexts.length === 0) return findings;
 
   let missingCount = 0;
   for (const t of figmaTexts) {
@@ -83,21 +101,16 @@ function presenceChecks(state, frame) {
     const found =
       liveTexts.has(key) ||
       Array.from(liveTexts).some((lt) => lt.includes(key) || key.includes(lt));
-    if (!found) {
-      missingCount++;
-      if (missingCount <= 6) {
-        findings.push({
-          category: "presence", severity: "error",
-          description: `"${t.slice(0, 50)}" present in Figma but missing in live state`,
-          evidence: frame.name,
-        });
-      }
-    }
+    if (!found) missingCount++;
   }
-  if (missingCount > 6) {
+
+  // Only report if more than 50% of significant texts are missing — avoids noise
+  // from Figma having extra helper text or slightly different wording
+  const missingRatio = missingCount / figmaTexts.length;
+  if (missingRatio > 0.5 && missingCount >= 3) {
     findings.push({
       category: "presence", severity: "warn",
-      description: `+${missingCount - 6} more missing text items (truncated)`,
+      description: `${missingCount}/${figmaTexts.length} key text labels from Figma not found in live (${Math.round(missingRatio * 100)}% missing)`,
       evidence: frame.name,
     });
   }

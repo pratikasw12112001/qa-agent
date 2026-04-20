@@ -247,8 +247,8 @@ function buildProtoBonuses(state, states, matchedMap, frames) {
       tokenOverlap(triggerNorm, elementNorm) >= 0.5;
 
     if (overlap) {
-      bonuses.set(interaction.toFrameId, 0.25);
-      console.log(`   → prototype bonus: "${state.triggerDesc}" → frame ${interaction.toFrameId} (+0.25)`);
+      bonuses.set(interaction.toFrameId, 0.5);
+      console.log(`   → prototype bonus: "${state.triggerDesc}" → frame ${interaction.toFrameId} (+0.5)`);
     }
   }
   return bonuses;

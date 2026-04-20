@@ -39,7 +39,7 @@ const BLOCKED_TEXT = [
 const BLOCKED_URL_RE = /\/(login|signin|auth|logout|terms|privacy|legal|cookie)/i;
 
 export async function exploreStates({
-  liveUrl, sessionPath, maxStates = 30, maxDepth = 3, waitAfterClickMs = 1200,
+  liveUrl, sessionPath, maxStates = 60, maxDepth = 4, waitAfterClickMs = 1200,
 }) {
   const email    = process.env.LOGIN_EMAIL;
   const password = process.env.LOGIN_PASSWORD;
@@ -217,6 +217,35 @@ export async function exploreStates({
         queue.push({ stateId: newState.id, depth: depth + 1 });
         console.log(`     + ${newState.id} via click "${truncate(el.text, 40)}" (${urlChanged ? "nav" : "overlay → will explore inside"})`);
 
+        // ── Form interaction: if this state has a form, fill and submit ──────
+        if (states.length < maxStates && depth + 1 < maxDepth) {
+          try {
+            const formResult = await tryFormFill(page);
+            if (formResult?.filled?.length > 0) {
+              console.log(`     ↳ form filled: ${formResult.filled.map(f => `${f.field}="${f.value}"`).join(", ")}`);
+              if (formResult.submitted) {
+                await page.waitForTimeout(800);
+                const formUrl  = page.url();
+                const formHash = await domHash(page);
+                if (!seenHashes.has(formHash)) {
+                  const formState = await captureState(page, {
+                    id: `s${stateCounter++}`, parent: newState.id,
+                    triggerDesc: `form submit "${truncate(el.text, 30)}" (${formResult.submitLabel})`,
+                    url: formUrl, depth: depth + 2,
+                    baseUrl: formUrl !== afterUrl ? formUrl : newBaseUrl,
+                    entryClicks: formUrl !== afterUrl ? [] : [...newEntryClicks],
+                    formInteraction: formResult,
+                  });
+                  states.push(formState);
+                  seenHashes.add(formState.hash);
+                  queue.push({ stateId: formState.id, depth: depth + 2 });
+                  console.log(`     + ${formState.id} form submitted → ${formUrl}`);
+                }
+              }
+            }
+          } catch { /* form fill is best-effort */ }
+        }
+
         if (urlChanged) {
           await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
           await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
@@ -377,6 +406,7 @@ async function captureState(page, meta) {
     url: meta.url, depth: meta.depth,
     baseUrl: meta.baseUrl || meta.url,
     entryClicks: meta.entryClicks || [],
+    formInteraction: meta.formInteraction || null,
     screenshot: screenshot.toString("base64"),
     textContent: dom.texts,
     structure: dom.structure,
@@ -432,3 +462,120 @@ async function dismissOverlay(page) {
 }
 
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + "…" : s; }
+
+// ─── Form interaction ─────────────────────────────────────────────────────────
+/**
+ * Detects visible form inputs, fills them with sensible test data, and attempts
+ * to submit the form. Returns a result object if any inputs were filled.
+ */
+export async function tryFormFill(page) {
+  // Collect all visible, unfilled inputs
+  const inputs = await page.evaluate(() => {
+    const SKIP_TYPES = new Set(["hidden","submit","button","reset","checkbox","radio","file","image"]);
+    const results = [];
+    for (const el of document.querySelectorAll("input, textarea, select")) {
+      if (SKIP_TYPES.has((el.type || "").toLowerCase())) continue;
+      if (el.disabled || el.readOnly) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 4 || rect.height < 4) continue;
+      const label = (
+        document.querySelector(`label[for="${el.id}"]`)?.innerText ||
+        el.closest("label")?.innerText || ""
+      ).trim().toLowerCase();
+      results.push({
+        tag:         el.tagName.toLowerCase(),
+        type:        el.type || "text",
+        id:          el.id,
+        name:        el.name,
+        placeholder: el.placeholder || "",
+        label,
+        value:       el.value || "",
+        isSelect:    el.tagName.toLowerCase() === "select",
+      });
+    }
+    return results;
+  });
+
+  const emptyInputs = inputs.filter(i => !i.value);
+  if (emptyInputs.length === 0) return null;
+
+  const filled = [];
+
+  for (const inp of emptyInputs) {
+    const value = generateFormValue(inp);
+    if (!value) continue;
+
+    // Build a reliable selector
+    let sel;
+    if (inp.id)   sel = `#${inp.id}`;
+    else if (inp.name) sel = `[name="${inp.name}"]`;
+    else          sel = inp.tag === "textarea" ? "textarea" : `input[type="${inp.type}"]`;
+
+    try {
+      if (inp.isSelect) {
+        // Pick first real option
+        await page.evaluate((s) => {
+          const el = document.querySelector(s);
+          if (el && el.options.length > 1) el.selectedIndex = 1;
+        }, sel);
+      } else if (inp.tag === "textarea" || inp.type === "text" || inp.type === "email" ||
+                 inp.type === "number"  || inp.type === "tel"   || inp.type === "url"  ||
+                 inp.type === "password"|| inp.type === "search" || inp.type === "") {
+        await page.fill(sel, value, { timeout: 3000 });
+      }
+      filled.push({ field: inp.label || inp.placeholder || inp.name || inp.id || inp.type, value });
+    } catch {
+      // field not interactable — skip
+    }
+  }
+
+  if (filled.length === 0) return null;
+
+  // Try to click a Submit / Save / Create / Add / OK button
+  const SUBMIT_TEXTS = ["Submit","Save","Create","Add","OK","Confirm","Apply","Done","Next","Continue"];
+  let submitted = false;
+  let submitLabel = "";
+
+  for (const text of SUBMIT_TEXTS) {
+    for (const sel of [
+      `.ant-modal-footer button:has-text("${text}")`,
+      `.ant-drawer-footer button:has-text("${text}")`,
+      `button[type="submit"]`,
+      `button:has-text("${text}")`,
+      `.ant-btn-primary:has-text("${text}")`,
+    ]) {
+      try {
+        const loc = page.locator(sel).first();
+        if (await loc.count() && await loc.isVisible().catch(() => false) &&
+            !await loc.isDisabled().catch(() => true)) {
+          await loc.click({ timeout: 3000 });
+          await page.waitForTimeout(1800);
+          submitted = true;
+          submitLabel = text;
+          break;
+        }
+      } catch { /* try next */ }
+    }
+    if (submitted) break;
+  }
+
+  return { filled, submitted, submitLabel };
+}
+
+/** Generates a sensible test value based on field hints */
+function generateFormValue(inp) {
+  const hint = `${inp.label} ${inp.placeholder} ${inp.name} ${inp.id}`.toLowerCase();
+  if (inp.isSelect) return null; // handled separately
+
+  if (inp.type === "email"    || hint.includes("email"))    return "qa-agent@test.com";
+  if (inp.type === "tel"      || hint.includes("phone") || hint.includes("mobile")) return "+1234567890";
+  if (inp.type === "url"      || hint.includes("url")  || hint.includes("link"))    return "https://example.com";
+  if (inp.type === "number"   || hint.includes("count") || hint.includes("qty"))    return "1";
+  if (inp.type === "password" || hint.includes("password"))                         return "TestPass123!";
+  if (inp.type === "date"     || hint.includes("date"))     return new Date().toISOString().slice(0,10);
+  if (hint.includes("name") || hint.includes("title"))      return "QA Test Entry";
+  if (hint.includes("desc")  || hint.includes("note") || hint.includes("comment")) return "Created by QA agent";
+  if (hint.includes("search")) return "test";
+  if (inp.tag === "textarea") return "QA agent test content";
+  return "QA Test";
+}
