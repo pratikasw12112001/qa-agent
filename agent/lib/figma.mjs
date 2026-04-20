@@ -265,6 +265,7 @@ export async function fetchFrames(figmaUrl, token, pageNameFilter = null) {
       textContent:  collectText(node),
       structure:    summarizeStructure(node),
       interactions: extractInteractions(node),
+      figmaStyles:  extractFigmaStyles(node),
     });
   }
 
@@ -354,6 +355,76 @@ function walk(node, fn, depth = 0) {
   if (!node || node.visible === false || depth > 8) return;
   fn(node);
   for (const c of node.children ?? []) walk(c, fn, depth + 1);
+}
+
+/**
+ * Extracts major style properties from a Figma frame's node tree.
+ * Returns categorised style samples: buttons, headings, inputs, bodyText.
+ * Only captures: fontSize, fontWeight, fontFamily, color, backgroundColor,
+ * padding (auto-layout), borderRadius.
+ */
+function extractFigmaStyles(frameNode) {
+  const result = { buttons: [], headings: [], inputs: [], bodyText: [] };
+
+  function rgbaToHex({ r, g, b, a = 1 }) {
+    const hex = [r, g, b].map(c => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+    return a < 0.99 ? `#${hex}${Math.round(a * 255).toString(16).padStart(2, "0")}` : `#${hex}`;
+  }
+
+  function getFillColor(fills) {
+    if (!fills?.length) return null;
+    const solid = fills.find(f => f.type === "SOLID" && f.visible !== false);
+    if (!solid?.color) return null;
+    return rgbaToHex(solid.color);
+  }
+
+  function nodeStyles(n) {
+    const s = {};
+    // Typography
+    if (n.style?.fontSize)    s.fontSize    = `${n.style.fontSize}px`;
+    if (n.style?.fontWeight)  s.fontWeight  = String(n.style.fontWeight);
+    if (n.style?.fontFamily)  s.fontFamily  = n.style.fontFamily;
+    if (n.style?.lineHeightPx) s.lineHeight = `${Math.round(n.style.lineHeightPx)}px`;
+    // Color (text fill)
+    const textColor = getFillColor(n.fills);
+    if (textColor) s.color = textColor;
+    // Background (frame/component fills)
+    const bgColor = n.type !== "TEXT" ? getFillColor(n.fills) : null;
+    if (bgColor) s.backgroundColor = bgColor;
+    // Padding (auto-layout)
+    if (n.paddingTop    != null) s.paddingTop    = `${n.paddingTop}px`;
+    if (n.paddingRight  != null) s.paddingRight  = `${n.paddingRight}px`;
+    if (n.paddingBottom != null) s.paddingBottom = `${n.paddingBottom}px`;
+    if (n.paddingLeft   != null) s.paddingLeft   = `${n.paddingLeft}px`;
+    // Border radius
+    if (n.cornerRadius  != null && n.cornerRadius > 0) s.borderRadius = `${n.cornerRadius}px`;
+    return s;
+  }
+
+  const nameLower = (n) => (n.name || "").toLowerCase();
+
+  walk(frameNode, (n) => {
+    const name = nameLower(n);
+    const isButton  = name.includes("button") || name.includes("btn") || name.includes("cta");
+    const isHeading = name.includes("heading") || name.includes("title") || name.includes("header");
+    const isInput   = name.includes("input") || name.includes("field") || name.includes("textfield");
+    const isText    = n.type === "TEXT";
+
+    const styles = nodeStyles(n);
+    if (!Object.keys(styles).length) return;
+
+    if (isButton && result.buttons.length < 3) {
+      result.buttons.push({ label: n.name, styles });
+    } else if (isHeading && result.headings.length < 2) {
+      result.headings.push({ label: n.name, styles });
+    } else if (isInput && result.inputs.length < 2) {
+      result.inputs.push({ label: n.name, styles });
+    } else if (isText && result.bodyText.length < 1 && n.style?.fontSize && n.style.fontSize < 16) {
+      result.bodyText.push({ label: (n.characters || n.name || "").slice(0, 30), styles });
+    }
+  });
+
+  return result;
 }
 
 function extractInteractions(frameNode, acc = []) {

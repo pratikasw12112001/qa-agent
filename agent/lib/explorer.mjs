@@ -397,6 +397,7 @@ async function captureState(page, meta) {
   // JPEG at 75% quality keeps screenshots small (target ~100KB vs ~1MB PNG)
   const screenshot  = await page.screenshot({ fullPage: false, type: "jpeg", quality: 75 });
   const dom         = await page.evaluate(extractDom);
+  const cssProps    = await page.evaluate(extractCssProperties);
   const hash = createHash("sha256")
     .update(meta.url)
     .update(dom.texts.join("|").slice(0, 4000))
@@ -411,6 +412,7 @@ async function captureState(page, meta) {
     screenshot: screenshot.toString("base64"),
     textContent: dom.texts,
     structure: dom.structure,
+    cssProperties: cssProps,
     hash,
   };
 }
@@ -433,6 +435,82 @@ function extractDom() {
     total:    document.querySelectorAll("*").length,
   };
   return { texts: Array.from(new Set(texts)).slice(0, 400), structure };
+}
+
+/**
+ * Extracts computed CSS values for major UI elements:
+ * primary buttons, headings (h1/h2), inputs, and body text.
+ * Only captures major params: font-size, font-weight, color, background-color,
+ * padding, border-radius, font-family.
+ */
+function extractCssProperties() {
+  const CSS_PROPS = [
+    "fontSize", "fontWeight", "fontFamily", "color",
+    "backgroundColor", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+    "borderRadius", "lineHeight",
+  ];
+
+  function getStyles(el) {
+    const cs = window.getComputedStyle(el);
+    const out = {};
+    for (const p of CSS_PROPS) out[p] = cs[p] || "";
+    return out;
+  }
+
+  function describeEl(el) {
+    const txt = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().slice(0, 40);
+    return txt || el.className?.split(" ")[0] || el.tagName.toLowerCase();
+  }
+
+  const result = { buttons: [], headings: [], inputs: [], bodyText: [] };
+
+  // Primary / CTA buttons (limit 3)
+  const btnSels = [
+    ".ant-btn-primary", "button[type='submit']",
+    ".ant-btn:not(.ant-btn-link):not(.ant-btn-text)",
+    "button:not([disabled])",
+  ];
+  const seenBtns = new Set();
+  for (const sel of btnSels) {
+    if (result.buttons.length >= 3) break;
+    for (const el of document.querySelectorAll(sel)) {
+      if (result.buttons.length >= 3) break;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 40 || rect.height < 20) continue;
+      const label = describeEl(el);
+      if (seenBtns.has(label)) continue;
+      seenBtns.add(label);
+      result.buttons.push({ label, styles: getStyles(el) });
+    }
+  }
+
+  // Headings (h1, h2 — limit 2)
+  for (const el of document.querySelectorAll("h1, h2, .ant-page-header-heading-title")) {
+    if (result.headings.length >= 2) break;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 10) continue;
+    result.headings.push({ label: describeEl(el), tag: el.tagName.toLowerCase(), styles: getStyles(el) });
+  }
+
+  // Inputs (limit 2)
+  for (const el of document.querySelectorAll("input[type='text'], input[type='email'], textarea, .ant-input")) {
+    if (result.inputs.length >= 2) break;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 16) continue;
+    result.inputs.push({ label: el.placeholder || el.name || "input", styles: getStyles(el) });
+  }
+
+  // Body/paragraph text (first visible p or span with meaningful text — limit 1)
+  for (const el of document.querySelectorAll("p, .ant-table-cell, td")) {
+    if (result.bodyText.length >= 1) break;
+    const t = (el.innerText || "").trim();
+    if (t.length < 10) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 40) continue;
+    result.bodyText.push({ label: t.slice(0, 30), styles: getStyles(el) });
+  }
+
+  return result;
 }
 
 async function domHash(page) {

@@ -9,7 +9,8 @@ export function generateReport({
   const review    = matches.filter((m) => m.status === "review");
   const unmatched = matches.filter((m) => m.status === "unmatched");
 
-  const hasIssues   = findings.length > 0;
+  const nonCssFindings = findings.filter(f => f.category !== "css");
+  const hasIssues   = nonCssFindings.length > 0;
   const hasChecks   = functional && (
     (functional.consoleErrors?.length ?? 0) +
     (functional.networkErrors?.length  ?? 0) +
@@ -160,8 +161,9 @@ ${warnings.length ? `
     <div class="hero-title">Frontend QA Report</div>
     <div class="hero-sub">${escapeHtml(meta.liveUrl)} · ${escapeHtml(now.slice(0,16).replace("T"," "))}</div>
     <div class="chips" style="margin-top:10px">
-      ${findings.filter(f=>f.severity==="error").length ? `<span class="chip e">${findings.filter(f=>f.severity==="error").length} error${findings.filter(f=>f.severity==="error").length>1?"s":""}</span>` : ""}
-      ${findings.filter(f=>f.severity==="warn").length  ? `<span class="chip w">${findings.filter(f=>f.severity==="warn").length} warning${findings.filter(f=>f.severity==="warn").length>1?"s":""}</span>`  : ""}
+      ${nonCssFindings.filter(f=>f.severity==="error").length ? `<span class="chip e">${nonCssFindings.filter(f=>f.severity==="error").length} error${nonCssFindings.filter(f=>f.severity==="error").length>1?"s":""}</span>` : ""}
+      ${nonCssFindings.filter(f=>f.severity==="warn").length  ? `<span class="chip w">${nonCssFindings.filter(f=>f.severity==="warn").length} warning${nonCssFindings.filter(f=>f.severity==="warn").length>1?"s":""}</span>`  : ""}
+      ${findings.filter(f=>f.category==="css").length ? `<span class="chip i">${findings.filter(f=>f.category==="css").length} CSS deviation${findings.filter(f=>f.category==="css").length>1?"s":""}</span>` : ""}
       <span class="chip g">${matched.length + review.length} frame${matched.length+review.length!==1?"s":""} compared</span>
       ${unmatched.length ? `<span class="chip i">${unmatched.length} unmatched</span>` : ""}
       <span class="chip i">${states.length} states explored</span>
@@ -198,7 +200,7 @@ ${hasIssues ? `
 <section id="issues" class="shut">
   <div class="sec-hd">
     <h2>Issues <span class="aud">QA / Designer</span>
-      <span style="font-size:12px;font-weight:400;color:var(--muted);">&nbsp;${findings.filter(f=>f.severity==="error").length} errors · ${findings.filter(f=>f.severity==="warn").length} warnings</span>
+      <span style="font-size:12px;font-weight:400;color:var(--muted);">&nbsp;${nonCssFindings.filter(f=>f.severity==="error").length} errors · ${nonCssFindings.filter(f=>f.severity==="warn").length} warnings</span>
     </h2>
     <span class="tog">▾</span>
   </div>
@@ -207,9 +209,9 @@ ${hasIssues ? `
       <button class="ifl on" data-f="all">All</button>
       <button class="ifl" data-f="error">Errors</button>
       <button class="ifl" data-f="warn">Warnings</button>
-      ${[...new Set(findings.map(f=>f.category).filter(Boolean))].map(c=>`<button class="ifl" data-f="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("")}
+      ${[...new Set(nonCssFindings.map(f=>f.category).filter(Boolean))].map(c=>`<button class="ifl" data-f="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("")}
     </div>
-    <div id="issue-list">${renderAllIssues(findings, states)}</div>
+    <div id="issue-list">${renderAllIssues(nonCssFindings, states)}</div>
   </div>
 </section>` : ""}
 
@@ -330,8 +332,9 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
     const m        = matches.find(x => x.stateId === s.id);
     const frame    = m?.frameId ? frames.find(f => f.id === m.frameId) : null;
     const findings = allFindings.filter(f => f.stateId === s.id);
-    const errs     = findings.filter(f => f.severity === "error").length;
-    const warns    = findings.filter(f => f.severity === "warn").length;
+    const nonCssFindings = findings.filter(f => f.category !== "css");
+    const errs     = nonCssFindings.filter(f => f.severity === "error").length;
+    const warns    = nonCssFindings.filter(f => f.severity === "warn").length;
     const fa       = frameAnalyses.find(x => x.stateId === s.id);
     const score    = fa?.frameScore ?? null;
     const rc       = score === null ? "#64748b" : score >= 75 ? "#22c55e" : score >= 50 ? "#eab308" : "#ef4444";
@@ -402,8 +405,41 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
     const tabDimensions = fa ? `<div class="dim-row">${dimPills}</div>${dimDetail}` :
       `<p style="color:var(--muted);font-size:13px">No analysis available.</p>`;
 
-    // TAB 3 — Issues (top 5 only, link to full Issues section for more)
-    const topFindings = findings.slice(0, 5);
+    // TAB 3 — CSS Deviations
+    const cssFindings = findings.filter(f => f.category === "css");
+    const tabCss = cssFindings.length ? `
+      <div style="margin-bottom:8px;font-size:12px;color:var(--muted)">
+        Computed CSS vs Figma design tokens — major params only (font-size, padding, color, border-radius)
+      </div>
+      <table style="font-size:12px;width:100%">
+        <thead><tr>
+          <th>Element</th><th>Property</th><th>Live</th><th>Figma</th><th></th>
+        </tr></thead>
+        <tbody>
+        ${cssFindings.map(f => {
+          // Parse description: "Button "Save": font-size is 14px in live, 16px in Figma"
+          const m = f.description.match(/^(.+?):\s+(.+?) is (.+?) in live,\s*(.+?) in Figma/);
+          const el   = m ? escapeHtml(m[1]) : escapeHtml(f.description);
+          const prop = m ? escapeHtml(m[2]) : "";
+          const lv   = m ? escapeHtml(m[3]) : "";
+          const fv   = m ? escapeHtml(m[4]) : "";
+          const sev  = f.severity === "error" ? "#ef4444" : "#eab308";
+          return `<tr>
+            <td style="color:#e2e8f0;font-weight:600">${el}</td>
+            <td style="color:#94a3b8;font-family:monospace">${prop}</td>
+            <td style="font-family:monospace;color:#93c5fd">${lv}</td>
+            <td style="font-family:monospace;color:#86efac">${fv}</td>
+            <td><span style="color:${sev};font-size:10px;font-weight:700">${f.severity.toUpperCase()}</span></td>
+          </tr>`;
+        }).join("")}
+        </tbody>
+      </table>` :
+      `<p style="color:var(--muted);font-size:13px;margin:0">
+        ${s.cssProperties ? "No CSS deviations detected — live values match Figma design tokens." : "CSS extraction not available for this state."}
+      </p>`;
+
+    // TAB 4 — Issues (top 5 only, link to full Issues section for more)
+    const topFindings = findings.filter(f => f.category !== "css").slice(0, 5);
     const tabIssues = topFindings.length ? `
       ${topFindings.map(f => `
         <div class="finding ${f.severity}">
@@ -436,10 +472,12 @@ function renderFrameCards(states, matches, allFindings, frames, frameAnalyses) {
         <div class="tabs">
           <button class="tb on" data-t="ss">Screenshots</button>
           <button class="tb" data-t="dim">Dimensions</button>
+          <button class="tb" data-t="css">CSS${cssFindings.length?` (${cssFindings.length})`:""}</button>
           <button class="tb" data-t="iss">Issues${errs+warns>0?` (${errs+warns})`:""}</button>
         </div>
         <div class="tp on" data-t="ss">${formBadge}<div class="ss-grid">${liveImg}${figmaImg}</div></div>
         <div class="tp" data-t="dim">${tabDimensions}</div>
+        <div class="tp" data-t="css">${tabCss}</div>
         <div class="tp" data-t="iss">${tabIssues}</div>
       </div>
     </div>`;

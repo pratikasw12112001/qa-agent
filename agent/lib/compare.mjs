@@ -39,6 +39,9 @@ export async function compareStateToFrame({ state, match, frame }) {
   // 1. Free deterministic check: text presence
   findings.push(...presenceChecks(state, frame));
 
+  // 1b. CSS property comparison (deterministic, no AI call)
+  findings.push(...cssComparison(state.cssProperties, frame.figmaStyles));
+
   // 2. Deep 7-dimension AI analysis (one vision call)
   if (match.framePng) {
     analysis = await visionAnalysis(state.screenshot, match.framePng, frame.name);
@@ -64,6 +67,143 @@ export async function compareStateToFrame({ state, match, frame }) {
   }
 
   return { findings, analysis };
+}
+
+// ─── CSS property comparison ──────────────────────────────────────────────────
+/**
+ * Compares live computed CSS values against Figma design tokens.
+ * Produces findings only for meaningful deviations (e.g. font-size off by >2px,
+ * padding off by >4px, color differs).
+ * Reports exact values: "Button 'Save': font-size is 14px in live, 16px in Figma"
+ */
+function cssComparison(liveCss, figmaStyles) {
+  const findings = [];
+  if (!liveCss || !figmaStyles) return findings;
+
+  const categories = [
+    { key: "buttons",  label: "Button" },
+    { key: "headings", label: "Heading" },
+    { key: "inputs",   label: "Input" },
+    { key: "bodyText", label: "Body text" },
+  ];
+
+  for (const { key, label } of categories) {
+    const liveItems  = liveCss[key]  ?? [];
+    const figmaItems = figmaStyles[key] ?? [];
+    if (!liveItems.length || !figmaItems.length) continue;
+
+    // Match by index (first live ↔ first figma, etc.)
+    const pairs = Math.min(liveItems.length, figmaItems.length);
+    for (let i = 0; i < pairs; i++) {
+      const live  = liveItems[i];
+      const figma = figmaItems[i];
+      const elLabel = live.label || figma.label || `${label} ${i+1}`;
+      const diffs = diffStyles(live.styles, figma.styles);
+      for (const d of diffs) {
+        findings.push({
+          category: "css",
+          severity: d.severity,
+          description: `${label} "${elLabel}": ${d.prop} is ${d.live} in live, ${d.figma} in Figma`,
+          evidence: `${label.toLowerCase()} css deviation`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Compares two style objects and returns meaningful deviations.
+ * Numeric values: flag if diff > threshold. Colors: flag if different.
+ */
+function diffStyles(live, figma) {
+  if (!live || !figma) return [];
+  const diffs = [];
+
+  // Font size — threshold 2px
+  if (live.fontSize && figma.fontSize) {
+    const lv = parseFloat(live.fontSize);
+    const fv = parseFloat(figma.fontSize);
+    if (!isNaN(lv) && !isNaN(fv) && Math.abs(lv - fv) > 2) {
+      diffs.push({ prop: "font-size", live: live.fontSize, figma: figma.fontSize,
+        severity: Math.abs(lv - fv) > 4 ? "error" : "warn" });
+    }
+  }
+
+  // Font weight
+  if (live.fontWeight && figma.fontWeight && live.fontWeight !== figma.fontWeight) {
+    diffs.push({ prop: "font-weight", live: live.fontWeight, figma: figma.fontWeight, severity: "warn" });
+  }
+
+  // Color (text) — compare hex/rgb loosely
+  if (live.color && figma.color) {
+    const lc = normalizeColor(live.color);
+    const fc = normalizeColor(figma.color);
+    if (lc && fc && !colorsClose(lc, fc, 20)) {
+      diffs.push({ prop: "color", live: live.color, figma: figma.color, severity: "warn" });
+    }
+  }
+
+  // Background color
+  if (live.backgroundColor && figma.backgroundColor) {
+    const lc = normalizeColor(live.backgroundColor);
+    const fc = normalizeColor(figma.backgroundColor);
+    if (lc && fc && !colorsClose(lc, fc, 20)) {
+      diffs.push({ prop: "background-color", live: live.backgroundColor, figma: figma.backgroundColor, severity: "warn" });
+    }
+  }
+
+  // Padding (vertical = top+bottom, horizontal = left+right) — threshold 4px
+  const livePadV  = (parseFloat(live.paddingTop  ||"0") + parseFloat(live.paddingBottom||"0"));
+  const figmaPadV = (parseFloat(figma.paddingTop ||"0") + parseFloat(figma.paddingBottom||"0"));
+  if (figma.paddingTop && Math.abs(livePadV - figmaPadV) > 4) {
+    diffs.push({ prop: "padding-vertical", live: `${parseFloat(live.paddingTop||"0")}px / ${parseFloat(live.paddingBottom||"0")}px`,
+      figma: `${parseFloat(figma.paddingTop||"0")}px / ${parseFloat(figma.paddingBottom||"0")}px`, severity: "warn" });
+  }
+
+  const livePadH  = (parseFloat(live.paddingLeft ||"0") + parseFloat(live.paddingRight ||"0"));
+  const figmaPadH = (parseFloat(figma.paddingLeft||"0") + parseFloat(figma.paddingRight ||"0"));
+  if (figma.paddingLeft && Math.abs(livePadH - figmaPadH) > 4) {
+    diffs.push({ prop: "padding-horizontal", live: `${parseFloat(live.paddingLeft||"0")}px / ${parseFloat(live.paddingRight||"0")}px`,
+      figma: `${parseFloat(figma.paddingLeft||"0")}px / ${parseFloat(figma.paddingRight||"0")}px`, severity: "warn" });
+  }
+
+  // Border radius — threshold 4px
+  if (live.borderRadius && figma.borderRadius) {
+    const lr = parseFloat(live.borderRadius);
+    const fr = parseFloat(figma.borderRadius);
+    if (!isNaN(lr) && !isNaN(fr) && Math.abs(lr - fr) > 4) {
+      diffs.push({ prop: "border-radius", live: live.borderRadius, figma: figma.borderRadius, severity: "warn" });
+    }
+  }
+
+  return diffs;
+}
+
+/** Parse hex or rgb(a) color to {r,g,b} 0-255 */
+function normalizeColor(c) {
+  if (!c || c === "transparent" || c === "rgba(0, 0, 0, 0)") return null;
+  // rgb(r,g,b) or rgba(r,g,b,a)
+  const rgb = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (rgb) return { r: +rgb[1], g: +rgb[2], b: +rgb[3] };
+  // #rrggbb or #rgb
+  const hex6 = c.match(/^#([0-9a-f]{6})/i);
+  if (hex6) {
+    const h = hex6[1];
+    return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+  }
+  const hex3 = c.match(/^#([0-9a-f]{3})/i);
+  if (hex3) {
+    const h = hex3[1];
+    return { r: parseInt(h[0]+h[0],16), g: parseInt(h[1]+h[1],16), b: parseInt(h[2]+h[2],16) };
+  }
+  return null;
+}
+
+/** Returns true if two RGB colors are within `threshold` Euclidean distance */
+function colorsClose({ r: r1, g: g1, b: b1 }, { r: r2, g: g2, b: b2 }, threshold) {
+  return Math.sqrt((r1-r2)**2 + (g1-g2)**2 + (b1-b2)**2) <= threshold;
 }
 
 // ─── presence checks (lenient) ───────────────────────────────────────────────
