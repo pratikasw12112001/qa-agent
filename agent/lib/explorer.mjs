@@ -303,15 +303,28 @@ export async function exploreStates({
           } catch { /* form fill is best-effort */ }
         }
 
-        if (urlChanged) {
+        // Always restore the page to baseUrl before trying the next sibling element.
+        // This is critical when a form fill / edit flow navigated away from baseUrl
+        // even if the original click was an overlay (urlChanged=false) — e.g. the
+        // PRD-sorted "Create new Logbook" click opens a modal, the form submits and
+        // navigates to /logbook/123, edit flow runs… and without this guard every
+        // subsequent element in the clickables list would fail on the wrong page.
+        const currentUrl = page.url();
+        const needsNavBack = urlChanged || currentUrl !== baseUrl;
+
+        if (needsNavBack) {
           await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
           await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
           for (const ec of entryClicks) {
+            await page.addStyleTag({
+              content: `tr td button, tr td [role="button"], tr td .ant-btn
+                { opacity:1!important; visibility:visible!important; pointer-events:auto!important; }`,
+            }).catch(() => {});
             await page.locator(ec.selector).first().click({ timeout: 3000 }).catch(() => {});
             await page.waitForTimeout(waitAfterClickMs);
           }
         } else {
-          // Dismiss this overlay and replay parent entry to continue exploring siblings
+          // Still on baseUrl with an overlay open — dismiss it so siblings can open fresh
           await dismissOverlay(page);
           for (const ec of entryClicks) {
             await page.addStyleTag({
