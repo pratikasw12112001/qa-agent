@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QA Report · mpauowz0sccam6</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #09090B;
+    --s1:       #18181B;
+    --s2:       #1C1C1F;
+    --border:   #27272A;
+    --border-md:#3F3F46;
+    --text:     #FAFAFA;
+    --text-sec: #A1A1AA;
+    --muted:    #71717A;
+    --red:      #F43F5E;
+    --amber:    #F59E0B;
+    --green:    #10B981;
+    --blue:     #3B82F6;
+    --violet:   #8B5CF6;
+    --radius:   10px;
+    --radius-sm:6px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5; font-size: 14px;
+  }
+
+  /* NAV */
+  #topnav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(9,9,11,.92); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    max-width: 1120px; margin: 0 auto; padding: 0 24px;
+    display: flex; align-items: center; gap: 24px; height: 48px;
+  }
+  .nav-brand { font-size: 13px; font-weight: 700; color: var(--text); letter-spacing: -.01em; flex-shrink:0; }
+  .nav-links { display: flex; gap: 4px; }
+  .nav-links a {
+    font-size: 13px; font-weight: 500; color: var(--text-sec); text-decoration: none;
+    padding: 5px 10px; border-radius: var(--radius-sm); transition: color .15s, background .15s;
+  }
+  .nav-links a:hover, .nav-links a.active { color: var(--text); background: var(--s1); }
+  .nav-run { margin-left: auto; font-size: 11px; font-family: monospace; color: var(--muted); }
+
+  /* LAYOUT */
+  main { max-width: 1120px; margin: 0 auto; padding: 24px 24px 48px; }
+
+  /* WARN BANNER */
+  .warn-banner {
+    display: flex; gap: 10px; align-items: flex-start;
+    background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.2);
+    border-radius: var(--radius); padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #FCD34D;
+  }
+  .warn-icon { flex-shrink: 0; }
+
+  /* HERO BAND */
+  .hero-band {
+    display: flex; gap: 28px; align-items: flex-start;
+    background: linear-gradient(135deg, #111116 0%, #18181B 100%);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px 32px; margin-bottom: 28px;
+  }
+  .hero-left { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
+  .score-ring {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 3px solid var(--sc, var(--muted));
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.3);
+  }
+  .score-num  { font-size: 26px; font-weight: 800; color: var(--sc, var(--muted)); line-height: 1; }
+  .score-denom { font-size: 10px; color: var(--muted); }
+  .score-verdict { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .hero-right { flex: 1; min-width: 0; }
+  .hero-title { font-size: 20px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 4px; }
+  .hero-meta  { font-size: 12px; color: var(--text-sec); margin-bottom: 16px; }
+  .hero-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat-pill {
+    display: flex; align-items: baseline; gap: 5px;
+    background: var(--s2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 12px;
+  }
+  .stat-pill.red   { background: rgba(244,63,94,.08);  border-color: rgba(244,63,94,.25); }
+  .stat-pill.amber { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.25); }
+  .stat-pill.muted { opacity: .7; }
+  .stat-val { font-size: 14px; font-weight: 700; }
+  .stat-lbl { font-size: 11px; color: var(--text-sec); }
+  .dim-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .dim-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; padding: 3px 10px;
+    border: 1px solid; border-radius: 999px; cursor: default;
+    letter-spacing: .01em;
+  }
+  .dim-chip-icon { font-size: 10px; }
+  .dim-chip-score { opacity: .7; }
+
+  /* SECTION HEADER */
+  section { margin-bottom: 32px; }
+  .section-header {
+    display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px;
+  }
+  .section-header h2 { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  .section-sub { font-size: 12px; color: var(--muted); }
+
+  /* SCREEN CARD */
+  .screen-card {
+    border: 1px solid var(--border); border-left: 3px solid var(--border-color, var(--border));
+    border-radius: var(--radius); background: var(--s1);
+    margin-bottom: 10px; overflow: hidden;
+    transition: border-color .2s;
+  }
+  .screen-card:hover { border-color: var(--border-md); border-left-color: var(--border-color, var(--border-md)); }
+
+  .card-header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px; cursor: pointer; user-select: none;
+  }
+  .card-header:hover { background: rgba(255,255,255,.02); }
+  .card-thumb {
+    width: 96px; height: 60px; object-fit: cover; object-position: top;
+    border-radius: 5px; flex-shrink: 0; border: 1px solid var(--border);
+  }
+  .card-thumb-empty {
+    width: 96px; height: 60px; border-radius: 5px; flex-shrink: 0;
+    border: 1px dashed var(--border); background: var(--s2);
+  }
+  .card-meta { flex: 1; min-width: 0; }
+  .card-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-frame { font-size: 11px; color: var(--text-sec); margin-top: 2px; }
+  .card-summary { font-size: 11px; color: var(--text-sec); margin-top: 5px; line-height: 1.5;
+                  border-left: 2px solid var(--blue); padding-left: 7px; }
+  .card-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .match-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px;
+  }
+  .match-badge.matched  { background: rgba(16,185,129,.12); color: #34D399; border: 1px solid rgba(16,185,129,.25); }
+  .match-badge.review   { background: rgba(245,158,11,.12); color: #FCD34D; border: 1px solid rgba(245,158,11,.25); }
+  .match-badge.unmatched{ background: rgba(244,63,94,.12);  color: #FDA4AF; border: 1px solid rgba(244,63,94,.25); }
+  .score-badge {
+    display: flex; align-items: baseline; gap: 1px;
+    border: 2px solid var(--sc, var(--muted));
+    border-radius: 8px; padding: 3px 8px;
+  }
+  .sb-num  { font-size: 15px; font-weight: 800; color: var(--sc, var(--muted)); }
+  .sb-den  { font-size: 9px; color: var(--muted); }
+  .card-chevron { font-size: 13px; color: var(--muted); transition: transform .2s; }
+  .card-chevron.open { transform: rotate(180deg); }
+
+  /* CARD BODY */
+  .card-body { border-top: 1px solid var(--border); padding: 0 16px 14px; }
+
+  /* DIMENSION ROWS */
+  .dim-row {
+    display: flex; flex-direction: column;
+    border-left: 2px solid transparent; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    margin: 10px 0; padding: 8px 10px;
+  }
+  .dim-row.failing { }
+  .dim-row-header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .dim-status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .dim-label { font-size: 12px; font-weight: 700; color: var(--text); }
+  .dim-score { font-size: 12px; font-weight: 700; }
+  .dim-notes { font-size: 12px; color: var(--text-sec); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dim-issues { list-style: none; margin-top: 6px; padding-left: 14px; }
+  .dim-issues li {
+    font-size: 12px; color: var(--text-sec); padding: 2px 0;
+    border-left: 1px solid var(--border); padding-left: 10px; margin-bottom: 2px;
+  }
+  .dim-issues li::before { content: "·  "; color: var(--muted); }
+
+  /* PASSING ROW */
+  .dim-row.passing {
+    display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px;
+    margin-top: 10px; padding: 8px 0; border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  .pass-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--text-sec);
+    background: rgba(16,185,129,.06); border: 1px solid rgba(16,185,129,.15);
+    border-radius: 999px; padding: 2px 10px;
+  }
+  .pass-dot { color: var(--green); font-size: 10px; }
+  .pass-score { color: var(--green); font-weight: 700; }
+
+  /* NO ANALYSIS */
+  .no-analysis { font-size: 12px; color: var(--muted); padding: 12px 0; }
+
+  /* CARD TOGGLES */
+  .card-toggles { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .toggle-btn {
+    font-size: 11px; font-weight: 600; color: var(--text-sec);
+    background: var(--s2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 4px 12px; cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .toggle-btn:hover, .toggle-btn.active {
+    color: var(--text); border-color: var(--border-md); background: var(--s2);
+  }
+
+  /* INLINE PANELS */
+  .inline-panel { margin-top: 12px; }
+  .ss-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .ss-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+  .ss-img { width: 100%; border-radius: 6px; display: block; border: 1px solid var(--border); }
+  .live-img  { border-color: rgba(59,130,246,.4); }
+  .figma-img { border-color: rgba(16,185,129,.4); background: #fff; }
+  .ss-empty  { display: flex; align-items: center; justify-content: center; height: 120px; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); font-size: 12px; }
+  .form-badge {
+    margin-top: 8px; font-size: 11px; color: #6EE7B7;
+    background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.2);
+    border-radius: var(--radius-sm); padding: 6px 10px;
+  }
+
+  /* CSS TABLE */
+  .css-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .css-table th { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+  .css-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .css-table tr:last-child td { border-bottom: none; }
+  .css-el   { font-weight: 600; color: var(--text); }
+  .css-prop { font-family: monospace; color: var(--text-sec); }
+  .css-live { font-family: monospace; color: #93C5FD; }
+  .css-figma{ font-family: monospace; color: #6EE7B7; }
+  .sev-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+
+  /* UNMATCHED NOTE */
+  .unmatched-note {
+    font-size: 12px; color: var(--muted); padding: 10px 14px;
+    border: 1px dashed var(--border); border-radius: var(--radius-sm); margin-top: 8px;
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+
+  /* EMPTY */
+  .empty-msg { font-size: 13px; color: var(--muted); padding: 20px 0; }
+
+  /* ACCORDION */
+  .accordion {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--s1); margin-bottom: 8px; overflow: hidden;
+  }
+  .acc-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 18px; cursor: pointer; user-select: none;
+  }
+  .acc-header:hover { background: rgba(255,255,255,.02); }
+  .acc-title { font-size: 13px; font-weight: 700; }
+  .acc-meta  { font-size: 12px; color: var(--text-sec); flex: 1; }
+  .acc-chev  { font-size: 12px; color: var(--muted); transition: transform .2s; }
+  .acc-chev.open { transform: rotate(180deg); }
+  .acc-body  { display: none; padding: 0 18px 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+  .acc-body.open { display: block; }
+
+  /* FINDING ROW */
+  .finding-row {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 7px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 12px;
+  }
+  .finding-row.error { background: rgba(244,63,94,.07);  border-left: 2px solid var(--red); }
+  .finding-row.warn  { background: rgba(245,158,11,.07); border-left: 2px solid var(--amber); }
+  .finding-row.pass  { background: rgba(16,185,129,.06); border-left: 2px solid var(--green); }
+  .finding-cat { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-sec); white-space: nowrap; flex-shrink:0; }
+  .finding-msg { color: var(--text); flex: 1; }
+  .all-clear { font-size: 13px; color: var(--green); padding: 4px 0; }
+
+  /* STATUS TAGS */
+  .status-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; }
+  .status-tag.matched, .status-tag.pass    { background: rgba(16,185,129,.12); color: #34D399; }
+  .status-tag.review,  .status-tag.partial { background: rgba(245,158,11,.12); color: #FCD34D; }
+  .status-tag.unmatched,.status-tag.fail   { background: rgba(244,63,94,.12);  color: #FDA4AF; }
+
+  /* SUB SECTION LABEL */
+  .sub-section-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+
+  /* RUN TABLE */
+  .run-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .run-table th { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 500; color: var(--muted); padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+  .run-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text); }
+  .run-table tr:last-child td { border-bottom: none; }
+
+  /* META GRID */
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  .meta-item { background: var(--s2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .meta-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 4px; }
+  .meta-val { font-size: 13px; font-weight: 600; color: var(--text); word-break: break-all; }
+
+  /* FOOTER */
+  .page-footer { text-align: center; font-size: 11px; color: var(--muted); padding: 20px 24px 32px; }
+
+  /* DESIGN SYSTEM CHECKS */
+  .ds-group {
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    margin-bottom: 6px; overflow: hidden;
+  }
+  .ds-group-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px; cursor: pointer; user-select: none;
+    background: var(--s2);
+  }
+  .ds-group-header:hover { background: rgba(255,255,255,.02); }
+  .ds-group-prefix { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; min-width: 40px; }
+  .ds-group-counts { display: flex; gap: 10px; font-size: 11px; font-weight: 600; flex: 1; }
+  .ds-group-chev { font-size: 11px; color: var(--muted); transition: transform .2s; }
+  .ds-group-chev.open { transform: rotate(180deg); }
+  .ds-group-body { padding: 6px 14px 8px; border-top: 1px solid var(--border); }
+
+  .ds-check-row {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 5px 10px; border-radius: var(--radius-sm);
+    border-left: 2px solid transparent; margin-bottom: 3px;
+    font-size: 12px;
+  }
+  .ds-check-id { font-family: monospace; font-size: 11px; font-weight: 700; color: var(--text-sec); min-width: 80px; flex-shrink: 0; }
+  .ds-result-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; min-width: 36px; flex-shrink: 0; }
+  .ds-check-notes { color: var(--text-sec); flex: 1; font-size: 12px; }
+  .ds-source-tag {
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--violet); background: rgba(139,92,246,.1); border: 1px solid rgba(139,92,246,.2);
+    border-radius: 999px; padding: 1px 6px; flex-shrink: 0;
+  }
+
+  .ds-collapsed-rows {
+    margin-top: 4px;
+  }
+  .ds-collapsed-rows summary {
+    font-size: 11px; color: var(--muted); cursor: pointer; padding: 4px 0;
+    list-style: none; user-select: none;
+  }
+  .ds-collapsed-rows summary::-webkit-details-marker { display: none; }
+  .ds-collapsed-rows summary::before { content: "▸ "; font-size: 10px; }
+  .ds-collapsed-rows[open] summary::before { content: "▾ "; }
+</style>
+</head><body>
+
+<!-- NAV -->
+<nav id="topnav">
+  <div class="nav-inner">
+    <span class="nav-brand">QA Report</span>
+    <div class="nav-links">
+      <a href="#summary">Summary</a>
+      <a href="#screens">Screens</a>
+      <a href="#checks">Checks</a>
+      <a href="#runinfo">Run Info</a>
+    </div>
+    <span class="nav-run">mpauowz0sccam6</span>
+  </div>
+</nav>
+
+<main>
+
+
+<div class="warn-banner">
+  <span class="warn-icon">⚠</span>
+  <span><strong>Figma:</strong> Figma API 403: {&quot;status&quot;:403,&quot;err&quot;:&quot;Invalid token&quot;}</span>
+</div>
+
+<!-- L2: HERO SUMMARY BAND -->
+<section id="summary" class="hero-band">
+  <div class="hero-left">
+    <div class="score-ring" style="--sc:#71717A">
+      <span class="score-num">—</span>
+      <span class="score-denom">/100</span>
+    </div>
+    <span class="score-verdict" style="color:#71717A">No data</span>
+  </div>
+  <div class="hero-right">
+    <div class="hero-title">Frontend QA Report</div>
+    <div class="hero-meta">https://www.figma.com/design/pfcUtE6WETUGyDqDwSqrp5/Mt.-Fuji--26?node-id=4238-46657&amp;p=f&amp;t=3F9j2KULWgN5hSBN-0 · 2026-05-18</div>
+    <div class="hero-stats">
+      <div class="stat-pill"><span class="stat-val">0</span><span class="stat-lbl">screens</span></div>
+      
+      
+      
+      
+      <div class="stat-pill "><span class="stat-val">0/0</span><span class="stat-lbl">DS checks</span></div>
+    </div>
+    <div class="dim-chips">
+      <span class="dim-chip" style="color:#71717A;background:rgba(113,113,122,.1);border-color:#71717A" data-dim="layoutStructure">
+          <span class="dim-chip-icon">—</span>Layout
+        </span><span class="dim-chip" style="color:#71717A;background:rgba(113,113,122,.1);border-color:#71717A" data-dim="typography">
+          <span class="dim-chip-icon">—</span>Typography
+        </span><span class="dim-chip" style="color:#71717A;background:rgba(113,113,122,.1);border-color:#71717A" data-dim="colors">
+          <span class="dim-chip-icon">—</span>Colors
+        </span><span class="dim-chip" style="color:#71717A;background:rgba(113,113,122,.1);border-color:#71717A" data-dim="componentStyling">
+          <span class="dim-chip-icon">—</span>Components
+        </span><span class="dim-chip" style="color:#71717A;background:rgba(113,113,122,.1);border-color:#71717A" data-dim="iconsAssets">
+          <span class="dim-chip-icon">—</span>Icons
+        </span><span class="dim-chip" style="color:#71717A;background:rgba(113,113,122,.1);border-color:#71717A" data-dim="interactionsStates">
+          <span class="dim-chip-icon">—</span>Interactions
+        </span><span class="dim-chip" style="color:#71717A;background:rgba(113,113,122,.1);border-color:#71717A" data-dim="contentAccuracy">
+          <span class="dim-chip-icon">—</span>Content
+        </span>
+    </div>
+  </div>
+</section>
+
+<!-- L3: SCREEN CARDS -->
+<section id="screens">
+  <div class="section-header">
+    <h2>Screen Comparisons</h2>
+    <span class="section-sub">0 screens · sorted by fidelity</span>
+  </div>
+  <p class="empty-msg">No matched frames found — check your Figma URL and page scope.</p>
+  
+</section>
+
+<!-- L4: FOOTER ACCORDIONS -->
+
+<section id="checks">
+  <div class="section-header">
+    <h2>Checks</h2>
+  </div>
+  
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">Functional &amp; Accessibility</span>
+    <span class="acc-meta"><span style="color:#F43F5E">2 errors</span> · <span style="color:#F59E0B">1 warning</span></span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    
+      <div class="finding-row error">
+        <span class="finding-cat">Console Error</span>
+        <span class="finding-msg">Failed to load resource: the server responded with a status of 403 ()</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">Network 403</span>
+        <span class="finding-msg">https://www.figma.com/design/pfcUtE6WETUGyDqDwSqrp5/Mt.-Fuji--26?node-id=4238-46657&amp;p=f&amp;t=3F9j2KULWgN5hSBN-0</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">A11Y · HTML-HAS-LANG</span>
+        <span class="finding-msg">Ensure every HTML document has a lang attribute</span>
+      </div>
+  </div>
+</div>
+  
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">PRD Coverage</span>
+    <span class="acc-meta">0/15 criteria passed · <span style="color:#F59E0B">28 gaps</span></span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    
+    <div class="sub-section-label">Acceptance Criteria</div>
+    
+      <div class="finding-row error">
+        <span class="finding-cat">AC-1</span>
+        <span class="finding-msg">All primary, secondary, and semantic colour tokens match Figma styles in light and dark mode.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-2</span>
+        <span class="finding-msg">Font family, size, weight, and line-height match Figma text styles for every level.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-3</span>
+        <span class="finding-msg">Component padding, gaps, and margins are consistent with the design token grid (4px base).</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-4</span>
+        <span class="finding-msg">Every interactive element shows a visible focus ring matching the Figma focus state.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-5</span>
+        <span class="finding-msg">All components reflow correctly at mobile (390px), tablet (768px), and desktop (1440px) without overflow.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-6</span>
+        <span class="finding-msg">Primary button background matches Figma token in default, hover, pressed, and disabled states.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-7</span>
+        <span class="finding-msg">Clicking an ancestor link in breadcrumbs navigates to the correct parent page.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-8</span>
+        <span class="finding-msg">Active tab has underline indicator and full-opacity label; inactive tabs are muted.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-9</span>
+        <span class="finding-msg">Typing in the search bar triggers a search with a maximum 300ms debounce.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-10</span>
+        <span class="finding-msg">Clicking the clear button in the search bar empties the input and resets results.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-11</span>
+        <span class="finding-msg">Checkbox toggles state when clicking the label or box.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-12</span>
+        <span class="finding-msg">Selecting one radio button deselects others in the same group.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-13</span>
+        <span class="finding-msg">Toggle changes state with a smooth animation when clicked.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-14</span>
+        <span class="finding-msg">Banner message text matches Figma copy exactly.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+      <div class="finding-row error">
+        <span class="finding-cat">AC-15</span>
+        <span class="finding-msg">ARIA roles and attributes are correctly applied to all interactive components.</span>
+        <span class="status-tag fail">fail</span>
+      </div>
+    
+    <div class="sub-section-label" style="margin-top:12px">Missing Screens</div>
+    
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Component QA Agent Documentation</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Global Checks</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Colour Styles</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Text Styles</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Buttons</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Breadcrumbs</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Tabs</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Stepper</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Search Bar</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Dropdown Menu</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Checkbox</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Radio Button</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Toggle (Switch)</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Captured</span>
+        <span class="finding-msg">Banner</span>
+      </div>
+    
+    <div class="sub-section-label" style="margin-top:12px">Untested Actions</div>
+    
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">run global checks</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">verify colour tokens</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">check typography scale</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">validate button states</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">test breadcrumb navigation</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">switch tabs</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">increment/decrement stepper value</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">perform search</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">open dropdown menu</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">toggle checkbox state</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">select radio button</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">toggle switch state</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">dismiss banner</span>
+      </div>
+      <div class="finding-row warn">
+        <span class="finding-cat">Not Triggered</span>
+        <span class="finding-msg">check accessibility features</span>
+      </div>
+  </div>
+</div>
+  
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">Design System Compliance</span>
+    <span class="acc-meta"><span style="color:#71717A">1 skipped</span></span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    
+    <div class="sub-section-label" style="margin-bottom:12px">1 check across 1 component group — FAIL and SKIP rows shown by default; PASS rows collapsed</div>
+    
+<div class="ds-group">
+  <div class="ds-group-header" onclick="toggleDsGroup('ds-grp-glb')">
+    <span class="ds-group-prefix" style="color:#71717A">GLB</span>
+    <span class="ds-group-counts">
+      
+      
+      <span style="color:#71717A">1 skip</span>
+    </span>
+    <span class="ds-group-chev" id="chev-ds-grp-glb">▾</span>
+  </div>
+  <div class="ds-group-body" id="ds-grp-glb" style="display:none">
+    
+    
+    
+    <details class="ds-collapsed-rows">
+      <summary>1 skipped check</summary>
+      <div class="ds-check-row" style="background:rgba(113,113,122,.05);border-left-color:#71717A">
+        <span class="ds-check-id">GLB-A-01</span>
+        <span class="ds-result-badge" style="color:#71717A">SKIP</span>
+        <span class="ds-check-notes">No interactive elements found in viewport</span>
+        <span class="ds-source-tag">auto</span>
+      </div>
+    </details>
+  </div>
+</div>
+  </div>
+</div>
+</section>
+
+<section id="runinfo">
+  <div class="section-header">
+    <h2>Run Info</h2>
+  </div>
+  
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">State Map</span>
+    <span class="acc-meta">1 states explored</span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    <table class="run-table">
+      <thead><tr><th>ID</th><th>Trigger</th><th>Status</th><th>Figma Frame</th><th style="text-align:right">Confidence</th></tr></thead>
+      <tbody><tr>
+      <td style="color:#A1A1AA;font-family:monospace;font-size:11px">s0</td>
+      <td>initial load</td>
+      <td><span class="status-tag unmatched">unmatched</span></td>
+      <td style="color:#A1A1AA">—</td>
+      <td style="color:#A1A1AA;text-align:right">—</td>
+    </tr></tbody>
+    </table>
+  </div>
+</div>
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">Run Metadata</span>
+    <span class="acc-meta">$0.002 · 2 AI calls</span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    <div class="meta-grid">
+      <div class="meta-item"><div class="meta-lbl">Live URL</div><div class="meta-val">https://www.figma.com/design/pfcUtE6WETUGyDqDwSqrp5/Mt.-Fuji--26?node-id=4238-46657&amp;p=f&amp;t=3F9j2KULWgN5hSBN-0</div></div>
+      <div class="meta-item"><div class="meta-lbl">Figma File</div><div class="meta-val">—</div></div>
+      <div class="meta-item"><div class="meta-lbl">Generated</div><div class="meta-val">2026-05-18 06:58:11 UTC</div></div>
+      <div class="meta-item"><div class="meta-lbl">Run ID</div><div class="meta-val" style="font-family:monospace"></div></div>
+      
+      <div class="meta-item"><div class="meta-lbl">Text calls</div><div class="meta-val">2</div></div>
+      <div class="meta-item"><div class="meta-lbl">Vision calls</div><div class="meta-val">0</div></div>
+      <div class="meta-item"><div class="meta-lbl">Cache hits</div><div class="meta-val">0</div></div>
+      <div class="meta-item"><div class="meta-lbl">Est. cost</div><div class="meta-val">$0.002</div></div>
+    </div>
+    
+    <div class="sub-section-label" style="margin-top:16px">Warnings</div>
+    <div class="finding-row warn"><span class="finding-cat">Figma</span><span class="finding-msg">Figma API 403: {&quot;status&quot;:403,&quot;err&quot;:&quot;Invalid token&quot;}</span></div>
+  </div>
+</div>
+</section>
+
+</main>
+
+<footer class="page-footer">
+  QA Agent · mpauowz0sccam6 · 2026-05-18 06:58:11
+</footer>
+
+<script>
+  // Card toggle
+  function toggleCard(id) {
+    const body = document.getElementById('body-' + id);
+    const chev = document.getElementById('chev-' + id);
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    if (chev) chev.classList.toggle('open', !open);
+  }
+
+  // Inline panel toggle (screenshots / CSS)
+  function togglePanel(id, btn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const open = el.style.display !== 'none';
+    el.style.display = open ? 'none' : 'block';
+    btn.classList.toggle('active', !open);
+  }
+
+  // Accordion toggle
+  function toggleAcc(header) {
+    const body = header.nextElementSibling;
+    const chev = header.querySelector('.acc-chev');
+    if (!body) return;
+    const open = body.classList.contains('open');
+    body.classList.toggle('open', !open);
+    if (chev) chev.classList.toggle('open', !open);
+  }
+
+  // Design system group toggle
+  function toggleDsGroup(id) {
+    const body = document.getElementById(id);
+    const chev = document.getElementById('chev-' + id);
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    if (chev) chev.classList.toggle('open', !open);
+  }
+
+  // Nav active link on scroll
+  const navLinks = document.querySelectorAll('.nav-links a');
+  const sections = document.querySelectorAll('section[id], .hero-band[id]');
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
+      }
+    });
+  }, { rootMargin: '-30% 0px -65% 0px' });
+  sections.forEach(s => io.observe(s));
+</script>
+</body></html>
