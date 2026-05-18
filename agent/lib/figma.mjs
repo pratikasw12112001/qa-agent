@@ -139,6 +139,161 @@ async function writeGhPagesCache(fileKey, data) {
   }
 }
 
+// ── Design token extraction ───────────────────────────────────────────────────
+
+/**
+ * Fetches design tokens from a specific Figma node (design system / component library).
+ * Extracts colour styles, text styles, spacing, and border-radius values from the
+ * node tree so deterministic checks can use exact values rather than ranges.
+ *
+ * Returns:
+ *   {
+ *     colors: { primary, background, surface, danger, warning, success, info, text, textMuted, border },
+ *     typography: { heading: {fontFamily, fontSize, fontWeight}, body: {...}, caption: {...} },
+ *     spacing:    { base, sm, md, lg, xl },
+ *     borderRadius: { button, card, input },
+ *     raw: { styles, nodes }   ← full API response for custom use
+ *   }
+ */
+export async function fetchDesignTokens(fileKey, nodeId, token) {
+  const apiNodeId = normalizeNodeId(nodeId);  // 11427-4928 → 11427:4928
+
+  console.log(`   Fetching design tokens from node ${apiNodeId}`);
+
+  // Fetch the node subtree (depth=4 captures component children)
+  const nodeRes = await figmaFetch(
+    `${FIGMA_BASE}/files/${fileKey}/nodes?ids=${encodeURIComponent(apiNodeId)}&depth=4`,
+    token
+  );
+  const nodeData = await nodeRes.json();
+
+  // Fetch file-level styles (colour + text style definitions)
+  await sleep(INTER_CALL_MS);
+  const stylesRes = await figmaFetch(`${FIGMA_BASE}/files/${fileKey}/styles`, token);
+  const stylesData = await stylesRes.json();
+
+  const tokens = {
+    colors:       {},
+    typography:   {},
+    spacing:      {},
+    borderRadius: {},
+  };
+
+  // ── Colour styles ──────────────────────────────────────────────────────────
+  const colorStyles = (stylesData.meta?.styles || []).filter(s => s.style_type === "FILL");
+  for (const style of colorStyles) {
+    const nameLower = style.name.toLowerCase().replace(/[^a-z0-9/]/g, " ").trim();
+    // Map common names to token keys
+    if (/primary|brand|blue/.test(nameLower) && !tokens.colors.primary)
+      tokens.colors.primary = { styleId: style.node_id, name: style.name };
+    if (/background|bg\/primary|surface\/primary/.test(nameLower) && !tokens.colors.background)
+      tokens.colors.background = { styleId: style.node_id, name: style.name };
+    if (/danger|error|destructive|red/.test(nameLower) && !tokens.colors.danger)
+      tokens.colors.danger = { styleId: style.node_id, name: style.name };
+    if (/warning|warn|amber|orange/.test(nameLower) && !tokens.colors.warning)
+      tokens.colors.warning = { styleId: style.node_id, name: style.name };
+    if (/success|positive|green/.test(nameLower) && !tokens.colors.success)
+      tokens.colors.success = { styleId: style.node_id, name: style.name };
+    if (/info|informational|cyan/.test(nameLower) && !tokens.colors.info)
+      tokens.colors.info = { styleId: style.node_id, name: style.name };
+    if (/text\/primary|text\/default|foreground/.test(nameLower) && !tokens.colors.text)
+      tokens.colors.text = { styleId: style.node_id, name: style.name };
+    if (/text\/secondary|text\/muted|text\/subtle/.test(nameLower) && !tokens.colors.textMuted)
+      tokens.colors.textMuted = { styleId: style.node_id, name: style.name };
+    if (/border|stroke|outline/.test(nameLower) && !tokens.colors.border)
+      tokens.colors.border = { styleId: style.node_id, name: style.name };
+  }
+
+  // ── Text styles ────────────────────────────────────────────────────────────
+  const textStyles = (stylesData.meta?.styles || []).filter(s => s.style_type === "TEXT");
+  for (const style of textStyles) {
+    const nameLower = style.name.toLowerCase();
+    if (!tokens.typography.heading && /h1|heading|title\/large|page.?title/.test(nameLower))
+      tokens.typography.heading = { styleId: style.node_id, name: style.name };
+    if (!tokens.typography.body && /body|paragraph|default|regular/.test(nameLower))
+      tokens.typography.body = { styleId: style.node_id, name: style.name };
+    if (!tokens.typography.caption && /caption|small|helper|secondary/.test(nameLower))
+      tokens.typography.caption = { styleId: style.node_id, name: style.name };
+    if (!tokens.typography.button && /button|cta|label/.test(nameLower))
+      tokens.typography.button = { styleId: style.node_id, name: style.name };
+  }
+
+  // ── Extract actual values from the node subtree ────────────────────────────
+  const rootNode = nodeData.nodes?.[apiNodeId]?.document;
+  if (rootNode) {
+    extractTokenValues(rootNode, tokens);
+  }
+
+  console.log(`   Design tokens extracted: ${Object.keys(tokens.colors).length} colour(s), ${Object.keys(tokens.typography).length} text style(s), borderRadius: ${JSON.stringify(tokens.borderRadius)}`);
+  return tokens;
+}
+
+/**
+ * Walk a Figma node tree to extract concrete token values (fills, cornerRadius, padding).
+ * Mutates the tokens object passed in.
+ */
+function extractTokenValues(node, tokens, depth = 0) {
+  if (!node || depth > 5) return;
+
+  const nameLower = (node.name || "").toLowerCase();
+
+  // ── Border radius from frame/component nodes named like "button" ──────────
+  if (node.cornerRadius != null && node.cornerRadius > 0) {
+    if (/button|btn/.test(nameLower) && !tokens.borderRadius.button)
+      tokens.borderRadius.button = node.cornerRadius;
+    if (/card|tile/.test(nameLower) && !tokens.borderRadius.card)
+      tokens.borderRadius.card = node.cornerRadius;
+    if (/input|field|text.?field/.test(nameLower) && !tokens.borderRadius.input)
+      tokens.borderRadius.input = node.cornerRadius;
+  }
+
+  // ── Spacing: look for auto-layout padding on button/card nodes ────────────
+  if (node.paddingTop != null && node.paddingLeft != null) {
+    if (/button|btn/.test(nameLower) && !tokens.spacing.buttonPaddingV) {
+      tokens.spacing.buttonPaddingV = node.paddingTop;
+      tokens.spacing.buttonPaddingH = node.paddingLeft;
+    }
+  }
+
+  // ── Fill colours from named nodes ─────────────────────────────────────────
+  if (node.fills?.length && node.fills[0]?.type === "SOLID" && node.fills[0]?.visible !== false) {
+    const { r, g, b, a } = node.fills[0].color;
+    const hex = rgbToHex(r, g, b);
+    const alpha = a ?? 1;
+    if (alpha < 0.05) { /* transparent — skip */ }
+    else if (/primary|brand|cta/.test(nameLower) && !tokens.colors.primaryHex)
+      tokens.colors.primaryHex = hex;
+    else if (/danger|error|destructive/.test(nameLower) && !tokens.colors.dangerHex)
+      tokens.colors.dangerHex = hex;
+    else if (/success|positive/.test(nameLower) && !tokens.colors.successHex)
+      tokens.colors.successHex = hex;
+    else if (/warning|warn/.test(nameLower) && !tokens.colors.warningHex)
+      tokens.colors.warningHex = hex;
+  }
+
+  // ── Typography from TEXT nodes ─────────────────────────────────────────────
+  if (node.type === "TEXT" && node.style) {
+    const { fontSize, fontWeight, fontFamily, lineHeightPx } = node.style;
+    if (fontSize && fontWeight) {
+      if (/h1|heading|page.?title/.test(nameLower) && !tokens.typography.headingValues)
+        tokens.typography.headingValues = { fontSize, fontWeight, fontFamily, lineHeight: Math.round(lineHeightPx ?? 0) };
+      if (/body|paragraph/.test(nameLower) && !tokens.typography.bodyValues)
+        tokens.typography.bodyValues = { fontSize, fontWeight, fontFamily, lineHeight: Math.round(lineHeightPx ?? 0) };
+      if (/button|label/.test(nameLower) && !tokens.typography.buttonValues)
+        tokens.typography.buttonValues = { fontSize, fontWeight, fontFamily };
+    }
+  }
+
+  for (const child of node.children || []) {
+    extractTokenValues(child, tokens, depth + 1);
+  }
+}
+
+function rgbToHex(r, g, b) {
+  const toHex = (v) => Math.round(v * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export async function fetchFrames(figmaUrl, token, pageNameFilter = null) {

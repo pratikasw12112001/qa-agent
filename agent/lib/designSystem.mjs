@@ -186,6 +186,21 @@ export const DESIGN_SYSTEM_CHECKS = {
   ],
 };
 
+// ─── Design token store ───────────────────────────────────────────────────────
+// Set by agent.mjs after fetching from Figma. Used by deterministic checks
+// to compare against real token values instead of hardcoded ranges.
+
+let _designTokens = null;
+
+/** Called by agent.mjs after fetchDesignTokens() succeeds. */
+export function setDesignTokens(tokens) {
+  _designTokens = tokens;
+  console.log("   Design tokens loaded into designSystem.mjs");
+}
+
+/** Returns the current design tokens, or null if not yet loaded. */
+export function getDesignTokens() { return _designTokens; }
+
 // ─── Component detectors — CSS selectors per component key ────────────────────
 
 export const COMPONENT_DETECTORS = {
@@ -633,6 +648,93 @@ export async function runDeterministicChecks(page, presentComponents) {
       results.push({ id: "SRH-A-01", ...srchAriaResult });
     } catch (e) {
       results.push({ id: "SRH-A-01", result: "SKIP", notes: `Check error: ${e.message?.slice(0, 80)}` });
+    }
+  }
+
+  // ── Token-based checks (only when real Figma values are available) ──────────
+  const tokens = getDesignTokens();
+  if (tokens && presentComponents.has("button")) {
+
+    // BTN-V-07: Border radius matches Figma token value
+    if (tokens.borderRadius?.button != null) {
+      const expectedRadius = tokens.borderRadius.button;
+      try {
+        const radiusResult = await page.evaluate((expected) => {
+          const btns = Array.from(document.querySelectorAll("button.ant-btn-primary, .ant-btn-primary"))
+            .filter(el => { const r = el.getBoundingClientRect(); return r.width > 40 && r.height > 20; })
+            .slice(0, 5);
+          if (!btns.length) return { result: "SKIP", notes: "No primary buttons found for radius check" };
+          const wrong = [];
+          for (const btn of btns) {
+            const live = parseFloat(window.getComputedStyle(btn).borderRadius);
+            if (!isNaN(live) && Math.abs(live - expected) > 2) {
+              const label = (btn.innerText || "").trim().slice(0, 20);
+              wrong.push(`"${label}": ${live}px live vs ${expected}px Figma`);
+            }
+          }
+          return wrong.length
+            ? { result: "FAIL", notes: wrong.join("; ") }
+            : { result: "PASS", notes: `Button border-radius ${expected}px matches Figma token` };
+        }, expectedRadius);
+        results.push({ id: "BTN-V-07", ...radiusResult });
+      } catch (e) {
+        results.push({ id: "BTN-V-07", result: "SKIP", notes: `Check error: ${e.message?.slice(0, 80)}` });
+      }
+    }
+
+    // BTN-V-10: Button label font size/weight match Figma token
+    if (tokens.typography?.buttonValues) {
+      const { fontSize, fontWeight } = tokens.typography.buttonValues;
+      try {
+        const typoResult = await page.evaluate(({ fontSize, fontWeight }) => {
+          const btns = Array.from(document.querySelectorAll(".ant-btn-primary, button[type='submit']"))
+            .filter(el => { const r = el.getBoundingClientRect(); return r.width > 40; })
+            .slice(0, 3);
+          if (!btns.length) return { result: "SKIP", notes: "No primary buttons found for typography check" };
+          const issues = [];
+          for (const btn of btns) {
+            const cs = window.getComputedStyle(btn);
+            const liveSz = parseFloat(cs.fontSize);
+            const liveWt = cs.fontWeight;
+            const label = (btn.innerText || "").trim().slice(0, 20);
+            if (fontSize && !isNaN(liveSz) && Math.abs(liveSz - fontSize) > 1)
+              issues.push(`"${label}" font-size: ${liveSz}px live vs ${fontSize}px Figma`);
+            if (fontWeight && String(liveWt) !== String(fontWeight))
+              issues.push(`"${label}" font-weight: ${liveWt} live vs ${fontWeight} Figma`);
+          }
+          return issues.length
+            ? { result: "FAIL", notes: issues.join("; ") }
+            : { result: "PASS", notes: `Button typography matches Figma token (${fontSize}px / ${fontWeight})` };
+        }, { fontSize, fontWeight });
+        results.push({ id: "BTN-V-10", ...typoResult });
+      } catch (e) {
+        results.push({ id: "BTN-V-10", result: "SKIP", notes: `Check error: ${e.message?.slice(0, 80)}` });
+      }
+    }
+  }
+
+  // TXT-V-01: Heading font properties match Figma token
+  if (tokens?.typography?.headingValues && presentComponents.has("text")) {
+    const { fontSize, fontWeight } = tokens.typography.headingValues;
+    try {
+      const headingResult = await page.evaluate(({ fontSize, fontWeight }) => {
+        const h = document.querySelector("h1, h2, .ant-page-header-heading-title");
+        if (!h) return { result: "SKIP", notes: "No heading element found" };
+        const cs = window.getComputedStyle(h);
+        const liveSz = parseFloat(cs.fontSize);
+        const liveWt = cs.fontWeight;
+        const issues = [];
+        if (fontSize && !isNaN(liveSz) && Math.abs(liveSz - fontSize) > 2)
+          issues.push(`font-size: ${liveSz}px live vs ${fontSize}px Figma`);
+        if (fontWeight && String(liveWt) !== String(fontWeight))
+          issues.push(`font-weight: ${liveWt} live vs ${fontWeight} Figma`);
+        return issues.length
+          ? { result: "FAIL", notes: issues.join("; ") }
+          : { result: "PASS", notes: `Heading typography matches Figma token (${fontSize}px / ${fontWeight})` };
+      }, { fontSize, fontWeight });
+      results.push({ id: "TXT-V-01", ...headingResult });
+    } catch (e) {
+      results.push({ id: "TXT-V-01", result: "SKIP", notes: `Check error: ${e.message?.slice(0, 80)}` });
     }
   }
 

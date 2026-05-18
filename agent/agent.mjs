@@ -24,7 +24,7 @@ if (!process.env.CI) {
 import { resolve, join } from "path";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "fs";
 
-import { fetchFrames }             from "./lib/figma.mjs";
+import { fetchFrames, fetchDesignTokens } from "./lib/figma.mjs";
 import { loginAndCaptureSession }  from "./lib/auth.mjs";
 import { exploreStates }           from "./lib/explorer.mjs";
 import { matchStatesToFrames }     from "./lib/matcher.mjs";
@@ -35,7 +35,7 @@ import { loadPrd, extractAcceptanceCriteria, checkAcceptanceCriteria,
 import { normalizeNodeId } from "./lib/figma.mjs";
 import { generateReport }          from "./lib/report.mjs";
 import { getAiStats }              from "./lib/ai.mjs";
-import { getChecksForComponents }  from "./lib/designSystem.mjs";
+import { getChecksForComponents, setDesignTokens } from "./lib/designSystem.mjs";
 
 const cfg = {
   figmaToken:      process.env.FIGMA_TOKEN,
@@ -43,8 +43,13 @@ const cfg = {
   liveUrl:         process.env.LIVE_URL,
   loginEmail:      process.env.LOGIN_EMAIL,
   loginPassword:   process.env.LOGIN_PASSWORD,
-  prdPdfPath:           process.env.PRD_PDF_PATH || null,
-  designSystemPdfPath:  process.env.DESIGN_SYSTEM_PDF_PATH || null,
+  prdPdfPath:              process.env.PRD_PDF_PATH || null,
+  designSystemPdfPath:     process.env.DESIGN_SYSTEM_PDF_PATH || null,
+  // Figma design system node ID — points to the component library page/frame
+  // Hardcoded to the known DS node; can be overridden via DESIGN_SYSTEM_NODE_ID env var
+  designSystemNodeId:      normalizeNodeId(
+    process.env.DESIGN_SYSTEM_NODE_ID || "11427-4928"
+  ),
   // Optional: explicit Figma node ID (API format 123:456 or URL format 123-456)
   startingFrameId: process.env.STARTING_FRAME_ID
     ? normalizeNodeId(process.env.STARTING_FRAME_ID)
@@ -131,12 +136,24 @@ async function main() {
     }
   }
 
-  // ── 2.6. Design system pre-load ───────────────────────────────────────────
-  const useDesignSystem = !!(cfg.designSystemPdfPath && existsSync(cfg.designSystemPdfPath));
-  if (useDesignSystem) {
-    console.log("\n▶  Design system doc loaded — component checks enabled");
+  // ── 2.6. Design system — fetch Figma tokens + enable component checks ────
+  // Design system checks are enabled when EITHER a DS PDF is uploaded OR a Figma
+  // token is available (we always know the DS node ID so tokens can be fetched).
+  const useDesignSystem = !!(cfg.designSystemPdfPath && existsSync(cfg.designSystemPdfPath))
+    || !!(cfg.figmaToken && cfg.figmaFileUrl);
+
+  if (useDesignSystem && cfg.figmaToken && fileKey && cfg.designSystemNodeId) {
+    console.log(`\n▶  Design system — fetching Figma tokens (node ${cfg.designSystemNodeId})`);
+    try {
+      const dsTokens = await fetchDesignTokens(fileKey, cfg.designSystemNodeId, cfg.figmaToken);
+      setDesignTokens(dsTokens);
+    } catch (e) {
+      console.warn(`   ⚠ Design token fetch failed — checks will use defaults: ${e.message.slice(0, 100)}`);
+    }
+  } else if (useDesignSystem) {
+    console.log("\n▶  Design system doc loaded — component checks enabled (no token fetch)");
   } else {
-    console.log("\n▶  Design system — skipped (no DESIGN_SYSTEM_PDF_PATH provided)");
+    console.log("\n▶  Design system — skipped");
   }
 
   // ── 3. Explore states ─────────────────────────────────────────────────────
