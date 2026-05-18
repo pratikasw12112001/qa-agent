@@ -21,6 +21,7 @@ export async function POST(req: NextRequest) {
     const startingFrame = String(form.get("startingFrame") || "").trim();
     const figmaPageName = String(form.get("figmaPageName") || "").trim();
     const prd           = form.get("prd") as File | null;
+    const designSystem  = form.get("designSystem") as File | null;
 
     if (!figmaUrl || !liveUrl) {
       return NextResponse.json({ error: "figmaUrl and liveUrl required" }, { status: 400 });
@@ -48,6 +49,15 @@ export async function POST(req: NextRequest) {
       if (ok) prdUrl = `https://raw.githubusercontent.com/${GH_REPO}/gh-pages/${path}`;
     }
 
+    // Upload design system doc if provided
+    let designSystemUrl = "";
+    if (designSystem && designSystem.size > 0) {
+      const buf = Buffer.from(await designSystem.arrayBuffer());
+      const path = `design-system/${runId}.pdf`;
+      const ok = await uploadToGhPages(path, buf, `design-system: upload ${runId}`);
+      if (ok) designSystemUrl = `https://raw.githubusercontent.com/${GH_REPO}/gh-pages/${path}`;
+    }
+
     // Trigger dispatch
     const dispatchRes = await fetch(`https://api.github.com/repos/${GH_REPO}/dispatches`, {
       method: "POST",
@@ -58,7 +68,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         event_type: "qa-run",
-        client_payload: { runId, figmaUrl, liveUrl, prdUrl, startingFrameId, figmaPageName },
+        client_payload: { runId, figmaUrl, liveUrl, prdUrl, designSystemUrl, startingFrameId, figmaPageName },
       }),
     });
     if (!dispatchRes.ok) {

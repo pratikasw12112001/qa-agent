@@ -14,7 +14,7 @@
 export function generateReport({
   runId, meta, frames, states, matches, findings, frameAnalyses = [],
   functional, prdAcs, coverageGaps = { missingScreens: [], untestedActions: [] },
-  aiStats, warnings = [],
+  aiStats, warnings = [], allDsResults = [],
 }) {
   const now = new Date().toISOString();
 
@@ -48,6 +48,15 @@ export function generateReport({
     coverageGaps.missingScreens?.length > 0 ||
     coverageGaps.untestedActions?.length > 0;
 
+  // ── Design system stats ──────────────────────────────────────────────────────
+  // Deduplicate: for each (id, stateId) pair prefer deterministic over vision
+  const dsDeduped = deduplicateDsResults(allDsResults);
+  const dsPass    = dsDeduped.filter(r => r.result === "PASS").length;
+  const dsFail    = dsDeduped.filter(r => r.result === "FAIL").length;
+  const dsSkip    = dsDeduped.filter(r => r.result === "SKIP").length;
+  const dsTotal   = dsDeduped.length;
+  const hasDs     = dsTotal > 0;
+
   const sc = avgScore;
   const scoreColor  = sc === null ? V.muted : sc >= 80 ? V.green : sc >= 60 ? V.amber : V.red;
   const scoreVerdict = sc === null ? "No data" : sc >= 80 ? "Passing" : sc >= 60 ? "Needs review" : "Failing";
@@ -67,7 +76,7 @@ export function generateReport({
     <div class="nav-links">
       <a href="#summary">Summary</a>
       <a href="#screens">Screens</a>
-      ${hasFunctional || hasPrd ? `<a href="#checks">Checks</a>` : ""}
+      ${hasFunctional || hasPrd || hasDs ? `<a href="#checks">Checks</a>` : ""}
       <a href="#runinfo">Run Info</a>
     </div>
     <span class="nav-run">${esc(runId)}</span>
@@ -100,6 +109,7 @@ ${warnings.length ? `
       ${reviewCards  ? `<div class="stat-pill amber"><span class="stat-val">${reviewCards}</span><span class="stat-lbl">review</span></div>` : ""}
       ${totalIssues  ? `<div class="stat-pill"><span class="stat-val">${totalIssues}</span><span class="stat-lbl">issues</span></div>` : ""}
       ${unmatched.length ? `<div class="stat-pill muted"><span class="stat-val">${unmatched.length}</span><span class="stat-lbl">unmatched</span></div>` : ""}
+      ${hasDs ? `<div class="stat-pill${dsFail > 0 ? " amber" : " "}"><span class="stat-val">${dsPass}/${dsTotal - dsSkip}</span><span class="stat-lbl">DS checks</span></div>` : ""}
     </div>
     <div class="dim-chips">
       ${Object.entries(DIM_META).map(([key, { label }]) => {
@@ -134,13 +144,14 @@ ${warnings.length ? `
 </section>
 
 <!-- L4: FOOTER ACCORDIONS -->
-${hasFunctional || hasPrd ? `
+${hasFunctional || hasPrd || hasDs ? `
 <section id="checks">
   <div class="section-header">
     <h2>Checks</h2>
   </div>
   ${hasFunctional ? renderFunctionalAccordion(functional) : ""}
   ${hasPrd ? renderPrdAccordion(prdAcs, coverageGaps) : ""}
+  ${hasDs ? renderDesignSystemAccordion(dsDeduped, dsPass, dsFail, dsSkip, dsTotal) : ""}
 </section>` : ""}
 
 <section id="runinfo">
@@ -429,6 +440,120 @@ function renderPrdAccordion(prdAcs, coverageGaps) {
         <span class="finding-cat">Not Triggered</span>
         <span class="finding-msg">${esc(a)}</span>
       </div>`).join("")}` : ""}
+  </div>
+</div>`;
+}
+
+// ─── Design system accordion ──────────────────────────────────────────────────
+
+/**
+ * Deduplicate DS results: for same (stateId, id), prefer deterministic over vision.
+ * If a check appears on multiple states, keep the most informative result:
+ * FAIL > PASS > SKIP.
+ */
+function deduplicateDsResults(allDsResults) {
+  // Group by check id (aggregate across states — keep worst result per check id)
+  const byId = new Map();
+  for (const r of allDsResults) {
+    const existing = byId.get(r.id);
+    if (!existing) {
+      byId.set(r.id, { ...r });
+    } else {
+      // Deterministic source beats vision for the same check id
+      const srcPriority = (src) => src === "deterministic" ? 1 : 0;
+      const resPriority = (res) => res === "FAIL" ? 2 : res === "PASS" ? 1 : 0;
+      if (
+        srcPriority(r.source) > srcPriority(existing.source) ||
+        (srcPriority(r.source) === srcPriority(existing.source) &&
+         resPriority(r.result) > resPriority(existing.result))
+      ) {
+        byId.set(r.id, { ...r });
+      }
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function renderDesignSystemAccordion(dsResults, passCount, failCount, skipCount, total) {
+  const runCount  = total - skipCount;
+  const metaParts = [];
+  if (runCount > 0)  metaParts.push(`${passCount}/${runCount} passed`);
+  if (failCount > 0) metaParts.push(`<span style="color:${V.red}">${failCount} failed</span>`);
+  if (skipCount > 0) metaParts.push(`<span style="color:${V.muted}">${skipCount} skipped</span>`);
+
+  // Group results by component prefix (first 3 chars of id, e.g. "BTN", "TAB")
+  const groups = new Map();
+  for (const r of dsResults) {
+    const prefix = r.id.split("-")[0];
+    if (!groups.has(prefix)) groups.set(prefix, []);
+    groups.get(prefix).push(r);
+  }
+
+  const groupHtml = Array.from(groups.entries()).map(([prefix, checks]) => {
+    const groupPass = checks.filter(c => c.result === "PASS").length;
+    const groupFail = checks.filter(c => c.result === "FAIL").length;
+    const groupSkip = checks.filter(c => c.result === "SKIP").length;
+    const groupColor = groupFail > 0 ? V.red : groupPass > 0 ? V.green : V.muted;
+
+    // Show all FAIL rows, collapsed SKIP rows, and collapsed PASS rows
+    const failRows = checks.filter(c => c.result === "FAIL");
+    const passRows = checks.filter(c => c.result === "PASS");
+    const skipRows = checks.filter(c => c.result === "SKIP");
+
+    const renderRow = (r) => {
+      const col = r.result === "PASS" ? V.green : r.result === "FAIL" ? V.red : V.muted;
+      const bg  = r.result === "PASS"
+        ? "rgba(16,185,129,.05)"
+        : r.result === "FAIL"
+          ? "rgba(244,63,94,.07)"
+          : "rgba(113,113,122,.05)";
+      return `<div class="ds-check-row" style="background:${bg};border-left-color:${col}">
+        <span class="ds-check-id">${esc(r.id)}</span>
+        <span class="ds-result-badge" style="color:${col}">${esc(r.result)}</span>
+        <span class="ds-check-notes">${esc(r.notes || "")}</span>
+        ${r.source === "deterministic" ? `<span class="ds-source-tag">auto</span>` : ""}
+      </div>`;
+    };
+
+    const groupId = `ds-grp-${prefix.toLowerCase()}`;
+    return `
+<div class="ds-group">
+  <div class="ds-group-header" onclick="toggleDsGroup('${groupId}')">
+    <span class="ds-group-prefix" style="color:${groupColor}">${esc(prefix)}</span>
+    <span class="ds-group-counts">
+      ${groupFail ? `<span style="color:${V.red}">${groupFail} fail</span>` : ""}
+      ${groupPass ? `<span style="color:${V.green}">${groupPass} pass</span>` : ""}
+      ${groupSkip ? `<span style="color:${V.muted}">${groupSkip} skip</span>` : ""}
+    </span>
+    <span class="ds-group-chev" id="chev-${groupId}">▾</span>
+  </div>
+  <div class="ds-group-body" id="${groupId}" style="display:${groupFail > 0 ? 'block' : 'none'}">
+    ${failRows.map(renderRow).join("")}
+    ${passRows.length ? `
+    <details class="ds-collapsed-rows">
+      <summary>${passRows.length} passing check${passRows.length > 1 ? "s" : ""}</summary>
+      ${passRows.map(renderRow).join("")}
+    </details>` : ""}
+    ${skipRows.length ? `
+    <details class="ds-collapsed-rows">
+      <summary>${skipRows.length} skipped check${skipRows.length > 1 ? "s" : ""}</summary>
+      ${skipRows.map(renderRow).join("")}
+    </details>` : ""}
+  </div>
+</div>`;
+  }).join("");
+
+  return `
+<div class="accordion">
+  <div class="acc-header" onclick="toggleAcc(this)">
+    <span class="acc-title">Design System Compliance</span>
+    <span class="acc-meta">${metaParts.join(" · ")}</span>
+    <span class="acc-chev">▾</span>
+  </div>
+  <div class="acc-body">
+    ${!total ? `<div class="all-clear">No design system checks were run. Set DESIGN_SYSTEM_PDF_PATH to enable.</div>` : `
+    <div class="sub-section-label" style="margin-bottom:12px">${total} check${total !== 1 ? "s" : ""} across ${groups.size} component group${groups.size !== 1 ? "s" : ""} — FAIL and SKIP rows shown by default; PASS rows collapsed</div>
+    ${groupHtml}`}
   </div>
 </div>`;
 }
@@ -780,7 +905,51 @@ const CSS = `
 
   /* FOOTER */
   .page-footer { text-align: center; font-size: 11px; color: var(--muted); padding: 20px 24px 32px; }
+
+  /* DESIGN SYSTEM CHECKS */
+  .ds-group {
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    margin-bottom: 6px; overflow: hidden;
+  }
+  .ds-group-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px; cursor: pointer; user-select: none;
+    background: var(--s2);
+  }
+  .ds-group-header:hover { background: rgba(255,255,255,.02); }
+  .ds-group-prefix { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; min-width: 40px; }
+  .ds-group-counts { display: flex; gap: 10px; font-size: 11px; font-weight: 600; flex: 1; }
+  .ds-group-chev { font-size: 11px; color: var(--muted); transition: transform .2s; }
+  .ds-group-chev.open { transform: rotate(180deg); }
+  .ds-group-body { padding: 6px 14px 8px; border-top: 1px solid var(--border); }
+
+  .ds-check-row {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 5px 10px; border-radius: var(--radius-sm);
+    border-left: 2px solid transparent; margin-bottom: 3px;
+    font-size: 12px;
+  }
+  .ds-check-id { font-family: monospace; font-size: 11px; font-weight: 700; color: var(--text-sec); min-width: 80px; flex-shrink: 0; }
+  .ds-result-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; min-width: 36px; flex-shrink: 0; }
+  .ds-check-notes { color: var(--text-sec); flex: 1; font-size: 12px; }
+  .ds-source-tag {
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--violet); background: rgba(139,92,246,.1); border: 1px solid rgba(139,92,246,.2);
+    border-radius: 999px; padding: 1px 6px; flex-shrink: 0;
+  }
+
+  .ds-collapsed-rows {
+    margin-top: 4px;
+  }
+  .ds-collapsed-rows summary {
+    font-size: 11px; color: var(--muted); cursor: pointer; padding: 4px 0;
+    list-style: none; user-select: none;
+  }
+  .ds-collapsed-rows summary::-webkit-details-marker { display: none; }
+  .ds-collapsed-rows summary::before { content: "▸ "; font-size: 10px; }
+  .ds-collapsed-rows[open] summary::before { content: "▾ "; }
 `;
+
 
 // ─── JS ───────────────────────────────────────────────────────────────────────
 
@@ -811,6 +980,16 @@ const JS = `
     if (!body) return;
     const open = body.classList.contains('open');
     body.classList.toggle('open', !open);
+    if (chev) chev.classList.toggle('open', !open);
+  }
+
+  // Design system group toggle
+  function toggleDsGroup(id) {
+    const body = document.getElementById(id);
+    const chev = document.getElementById('chev-' + id);
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
     if (chev) chev.classList.toggle('open', !open);
   }
 

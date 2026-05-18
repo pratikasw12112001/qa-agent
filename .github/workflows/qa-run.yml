@@ -73,6 +73,21 @@ jobs:
             fi
           fi
 
+      - name: Download Design System PDF (if provided)
+        env:
+          DS_URL: ${{ github.event.client_payload.designSystemUrl || '' }}
+        run: |
+          if [ -n "$DS_URL" ]; then
+            mkdir -p agent/uploads
+            curl -sL --retry 5 --retry-delay 10 --retry-connrefused "$DS_URL" -o agent/uploads/design-system.pdf
+            if [ -s agent/uploads/design-system.pdf ]; then
+              echo "DESIGN_SYSTEM_PDF_PATH=./uploads/design-system.pdf" >> $GITHUB_ENV
+              echo "  Design system doc downloaded ($(wc -c < agent/uploads/design-system.pdf) bytes)"
+            else
+              echo "  WARN: Design system download failed — continuing without DS checks"
+            fi
+          fi
+
       - name: Run QA agent
         working-directory: agent
         env:
@@ -82,7 +97,8 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           FIGMA_FILE_URL: ${{ github.event.client_payload.figmaUrl || github.event.inputs.figmaUrl }}
           LIVE_URL:       ${{ github.event.client_payload.liveUrl || github.event.inputs.liveUrl }}
-          PRD_PDF_PATH:   ${{ env.PRD_PDF_PATH || '' }}
+          PRD_PDF_PATH:              ${{ env.PRD_PDF_PATH || '' }}
+          DESIGN_SYSTEM_PDF_PATH:   ${{ env.DESIGN_SYSTEM_PDF_PATH || '' }}
           RUN_ID:         ${{ github.event.client_payload.runId || github.event.inputs.runId || 'manual' }}
           SESSION_PATH:   ./sessions/session.json
           OUT_DIR:        ./reports

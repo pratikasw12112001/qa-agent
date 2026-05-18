@@ -35,6 +35,7 @@ import { loadPrd, extractAcceptanceCriteria, checkAcceptanceCriteria,
 import { normalizeNodeId } from "./lib/figma.mjs";
 import { generateReport }          from "./lib/report.mjs";
 import { getAiStats }              from "./lib/ai.mjs";
+import { getChecksForComponents }  from "./lib/designSystem.mjs";
 
 const cfg = {
   figmaToken:      process.env.FIGMA_TOKEN,
@@ -42,7 +43,8 @@ const cfg = {
   liveUrl:         process.env.LIVE_URL,
   loginEmail:      process.env.LOGIN_EMAIL,
   loginPassword:   process.env.LOGIN_PASSWORD,
-  prdPdfPath:      process.env.PRD_PDF_PATH || null,
+  prdPdfPath:           process.env.PRD_PDF_PATH || null,
+  designSystemPdfPath:  process.env.DESIGN_SYSTEM_PDF_PATH || null,
   // Optional: explicit Figma node ID (API format 123:456 or URL format 123-456)
   startingFrameId: process.env.STARTING_FRAME_ID
     ? normalizeNodeId(process.env.STARTING_FRAME_ID)
@@ -129,6 +131,14 @@ async function main() {
     }
   }
 
+  // ── 2.6. Design system pre-load ───────────────────────────────────────────
+  const useDesignSystem = !!(cfg.designSystemPdfPath && existsSync(cfg.designSystemPdfPath));
+  if (useDesignSystem) {
+    console.log("\n▶  Design system doc loaded — component checks enabled");
+  } else {
+    console.log("\n▶  Design system — skipped (no DESIGN_SYSTEM_PDF_PATH provided)");
+  }
+
   // ── 3. Explore states ─────────────────────────────────────────────────────
   console.log("\n▶  Exploring UI states (sidebar excluded)");
   const states = await exploreStates({
@@ -156,14 +166,26 @@ async function main() {
   // ── 5. Compare each pair ──────────────────────────────────────────────────
   const findings      = [];
   const frameAnalyses = [];   // rich per-frame analysis for the deep-dive section
+  const allDsResults  = [];   // all design system check results (deterministic + vision)
+
   if (matches.length > 0) {
     console.log("\n▶  Comparing matched pairs");
     for (const state of states) {
       const m = matches.find((x) => x.stateId === state.id);
       if (!m || !m.frameId) continue;
       const frame = frames.find((f) => f.id === m.frameId);
-      const { findings: f, analysis } = await compareStateToFrame({ state, match: m, frame });
+
+      // Collect DS checks for this state (from explorer's component detection)
+      const stateComponents = state.dsComponents ?? [];
+      const designSystemChecks = useDesignSystem
+        ? getChecksForComponents(stateComponents)
+        : [];
+
+      const { findings: f, analysis } = await compareStateToFrame({
+        state, match: m, frame, designSystemChecks,
+      });
       for (const item of f) findings.push({ ...item, stateId: state.id });
+
       if (analysis) {
         frameAnalyses.push({
           stateId:        state.id,
@@ -177,11 +199,49 @@ async function main() {
           liveUrl:        state.url,
           triggerDesc:    state.triggerDesc,
         });
+
+        // Merge vision DS checks into allDsResults
+        if (useDesignSystem && Array.isArray(analysis.dsChecks)) {
+          for (const r of analysis.dsChecks) {
+            allDsResults.push({ ...r, stateId: state.id, source: "vision" });
+          }
+        }
       }
+
+      // Add deterministic DS checks from explorer into allDsResults
+      if (useDesignSystem && Array.isArray(state.dsDeterministic)) {
+        for (const r of state.dsDeterministic) {
+          // Avoid duplicate IDs per state (deterministic takes precedence over vision for same id)
+          const alreadyHave = allDsResults.some(
+            x => x.stateId === state.id && x.id === r.id && x.source === "deterministic"
+          );
+          if (!alreadyHave) {
+            allDsResults.push({ ...r, stateId: state.id, source: "deterministic" });
+          }
+        }
+      }
+
       console.log(`   ${state.id} → ${frame?.name}: ${f.length} finding(s) · score: ${analysis?.frameScore ?? "?"}/100`);
+    }
+
+    if (useDesignSystem) {
+      const dsPass = allDsResults.filter(r => r.result === "PASS").length;
+      const dsFail = allDsResults.filter(r => r.result === "FAIL").length;
+      console.log(`   DS checks: ${dsPass} passed · ${dsFail} failed · ${allDsResults.length} total`);
     }
   } else {
     console.log("\n▶  Comparison — skipped (no matches)");
+
+    // Still collect deterministic DS results even without Figma matches
+    if (useDesignSystem) {
+      for (const state of states) {
+        if (Array.isArray(state.dsDeterministic)) {
+          for (const r of state.dsDeterministic) {
+            allDsResults.push({ ...r, stateId: state.id, source: "deterministic" });
+          }
+        }
+      }
+    }
   }
 
   // ── 6. Functional tests ───────────────────────────────────────────────────
@@ -238,6 +298,7 @@ async function main() {
     coverageGaps,
     warnings,
     aiStats: getAiStats(),
+    allDsResults,
   });
   const reportPath = join(cfg.outDir, "report.html");
   writeFileSync(reportPath, html, "utf8");

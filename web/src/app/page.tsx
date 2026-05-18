@@ -8,7 +8,9 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [prdFileName, setPrdFileName] = useState<string | null>(null);
+  const [dsFileName, setDsFileName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const dsFileRef = useRef<HTMLInputElement>(null);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -20,7 +22,8 @@ export default function HomePage() {
     const liveUrl       = (form.elements.namedItem("liveUrl")       as HTMLInputElement).value.trim();
     const startingFrame = (form.elements.namedItem("startingFrame") as HTMLInputElement).value.trim();
     const figmaPageName = (form.elements.namedItem("figmaPageName") as HTMLInputElement).value.trim();
-    const file = fileRef.current?.files?.[0];
+    const file   = fileRef.current?.files?.[0];
+    const dsFile = dsFileRef.current?.files?.[0];
 
     try {
       const fd = new FormData();
@@ -28,7 +31,8 @@ export default function HomePage() {
       fd.append("liveUrl", liveUrl);
       if (startingFrame)  fd.append("startingFrame", startingFrame);
       if (figmaPageName)  fd.append("figmaPageName", figmaPageName);
-      if (file) fd.append("prd", file);
+      if (file)   fd.append("prd", file);
+      if (dsFile) fd.append("designSystem", dsFile);
 
       const res = await fetch("/api/run", { method: "POST", body: fd });
       const data = await res.json();
@@ -98,29 +102,57 @@ export default function HomePage() {
             </p>
           </div>
 
-          <div>
-            <label style={label}>PRD Document <span style={{ color: "#94a3b8", fontWeight: 400 }}>(optional)</span></label>
-            <div
-              onClick={() => fileRef.current?.click()}
-              style={{
-                border: "1px dashed #2d3660", borderRadius: "10px",
-                padding: "20px", textAlign: "center", cursor: "pointer", background: "#111827",
-              }}
-            >
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".pdf"
-                style={{ display: "none" }}
-                onChange={(e) => setPrdFileName(e.target.files?.[0]?.name ?? null)}
-              />
-              <div style={{ fontSize: "24px", marginBottom: "6px" }}>📄</div>
-              {prdFileName
-                ? <p style={{ fontSize: "13px", color: "#22c55e", fontWeight: 600 }}>✓ {prdFileName}</p>
-                : <p style={{ fontSize: "13px", color: "#94a3b8" }}>Click to upload PDF</p>}
-              <p style={{ fontSize: "11px", color: "#475569", marginTop: "4px" }}>
-                Enables acceptance-criteria checking against live states
-              </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div>
+              <label style={label}>PRD Document <span style={{ color: "#94a3b8", fontWeight: 400 }}>(optional)</span></label>
+              <div
+                onClick={() => fileRef.current?.click()}
+                style={{
+                  border: "1px dashed #2d3660", borderRadius: "10px",
+                  padding: "16px", textAlign: "center", cursor: "pointer", background: "#111827",
+                }}
+              >
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".pdf"
+                  style={{ display: "none" }}
+                  onChange={(e) => setPrdFileName(e.target.files?.[0]?.name ?? null)}
+                />
+                <div style={{ fontSize: "20px", marginBottom: "4px" }}>📄</div>
+                {prdFileName
+                  ? <p style={{ fontSize: "12px", color: "#22c55e", fontWeight: 600 }}>✓ {prdFileName}</p>
+                  : <p style={{ fontSize: "12px", color: "#94a3b8" }}>Click to upload PDF</p>}
+                <p style={{ fontSize: "11px", color: "#475569", marginTop: "4px" }}>
+                  Acceptance-criteria & coverage checking
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label style={label}>Design System Doc <span style={{ color: "#94a3b8", fontWeight: 400 }}>(optional)</span></label>
+              <div
+                onClick={() => dsFileRef.current?.click()}
+                style={{
+                  border: "1px dashed #2d3660", borderRadius: "10px",
+                  padding: "16px", textAlign: "center", cursor: "pointer", background: "#111827",
+                }}
+              >
+                <input
+                  ref={dsFileRef}
+                  type="file"
+                  accept=".pdf"
+                  style={{ display: "none" }}
+                  onChange={(e) => setDsFileName(e.target.files?.[0]?.name ?? null)}
+                />
+                <div style={{ fontSize: "20px", marginBottom: "4px" }}>🎨</div>
+                {dsFileName
+                  ? <p style={{ fontSize: "12px", color: "#22c55e", fontWeight: 600 }}>✓ {dsFileName}</p>
+                  : <p style={{ fontSize: "12px", color: "#94a3b8" }}>Click to upload PDF</p>}
+                <p style={{ fontSize: "11px", color: "#475569", marginTop: "4px" }}>
+                  Component checks (ARIA, cursor, spacing…)
+                </p>
+              </div>
             </div>
           </div>
 
@@ -149,7 +181,7 @@ export default function HomePage() {
             ["Smart exploration", "Clicks content buttons — not the sidebar"],
             ["Prototype-guided matching", "Auto-detects Figma flow starting points"],
             ["7-dimension analysis", "Layout, typography, colors, components and more"],
-            ["PRD coverage gaps", "Flags missing screens and untested actions"],
+            ["Design system checks", "124 component checks — ARIA, cursor, spacing, focus ring"],
           ].map(([title, desc]) => (
             <div key={title} style={{ background: "#111827", border: "1px solid #1e2640", borderRadius: "10px", padding: "12px" }}>
               <div style={{ fontSize: "13px", fontWeight: 600, marginBottom: "2px" }}>{title}</div>

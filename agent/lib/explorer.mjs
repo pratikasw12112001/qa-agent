@@ -12,6 +12,7 @@
 import { chromium } from "playwright";
 import { createHash } from "crypto";
 import { detectLoginPage, performLoginOnPage } from "./auth.mjs";
+import { detectComponentsOnPage, runDeterministicChecks } from "./designSystem.mjs";
 
 // ── Sidebar selectors — never click anything inside these ─────────────────────
 const SIDEBAR_SELECTORS = [
@@ -522,6 +523,16 @@ async function captureState(page, meta) {
     .update(JSON.stringify(dom.structure))
     .update((meta.entryClicks || []).map(e => e.text).join(">"))
     .digest("hex");
+
+  // ── Design system detection (best-effort) ──────────────────────────────────
+  let dsComponents    = [];
+  let dsDeterministic = [];
+  try {
+    const presentComponents = await detectComponentsOnPage(page);
+    dsComponents    = [...presentComponents];
+    dsDeterministic = await runDeterministicChecks(page, presentComponents);
+  } catch { /* non-fatal — continue without DS data */ }
+
   return {
     id: meta.id, parent: meta.parent, triggerDesc: meta.triggerDesc,
     url: meta.url, depth: meta.depth,
@@ -534,6 +545,8 @@ async function captureState(page, meta) {
     cssProperties: cssProps,
     croppedRegions,
     hash,
+    dsComponents,
+    dsDeterministic,
   };
 }
 

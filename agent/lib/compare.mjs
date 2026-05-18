@@ -23,7 +23,7 @@ const DIMENSIONS = [
   "contentAccuracy",
 ];
 
-export async function compareStateToFrame({ state, match, frame }) {
+export async function compareStateToFrame({ state, match, frame, designSystemChecks = [] }) {
   const findings = [];
   let analysis   = null;
 
@@ -44,7 +44,7 @@ export async function compareStateToFrame({ state, match, frame }) {
 
   // 2. Deep 7-dimension AI analysis (one vision call — full screen)
   if (match.framePng) {
-    analysis = await visionAnalysis(state.screenshot, match.framePng, frame.name);
+    analysis = await visionAnalysis(state.screenshot, match.framePng, frame.name, designSystemChecks);
   } else {
     // No PNG — produce a text-only analysis stub
     analysis = textOnlyAnalysis(state, frame);
@@ -382,11 +382,13 @@ function presenceChecks(state, frame) {
 
 // ─── 7-dimension vision analysis ─────────────────────────────────────────────
 
-async function visionAnalysis(liveB64, figmaB64, frameName) {
+async function visionAnalysis(liveB64, figmaB64, frameName, designSystemChecks = []) {
   const system =
     "You are a senior UI/UX QA engineer doing a pixel-level comparison between a LIVE app screenshot " +
     "and a FIGMA design frame. Score each of 7 dimensions 0-100 (100 = perfect match). " +
     "Be specific, actionable, and reference exact locations on screen. Return JSON only.";
+
+  const dsSection = buildDsPromptSection(designSystemChecks);
 
   const user = [
     `Compare LIVE vs FIGMA frame "${frameName}". Analyze all 7 dimensions and return JSON:`,
@@ -401,7 +403,7 @@ async function visionAnalysis(liveB64, figmaB64, frameName) {
     `    "iconsAssets":        { "score": 0-100, "status": "matches|partial|deviates", "notes": "<icon presence, size, style, image assets>", "issues": [] },`,
     `    "interactionsStates": { "score": 0-100, "status": "matches|partial|deviates", "notes": "<hover/active/disabled states, loading, empty states, dropdowns>", "issues": [] },`,
     `    "contentAccuracy":    { "score": 0-100, "status": "matches|partial|deviates", "notes": "<static UI copy only — see rules below>", "issues": [] }`,
-    `  }`,
+    `  }${dsSection ? `,\n  "dsChecks": [{"id": "...", "result": "PASS|FAIL|SKIP", "notes": "short reason"}]` : ""}`,
     `}`,
     ``,
     `CONTENT ACCURACY rules — this dimension evaluates ONLY static UI copy that is defined by designers/developers:`,
@@ -413,6 +415,7 @@ async function visionAnalysis(liveB64, figmaB64, frameName) {
     `             that is NOT a deviation — the design used placeholder data.`,
     ``,
     `Limit issues[] to max 4 per dimension. Use "matches" only when score >= 80. Use "deviates" when score < 50.`,
+    dsSection,
   ].join("\n");
 
   const raw = await askVision(system, user, [
@@ -437,10 +440,22 @@ async function visionAnalysis(liveB64, figmaB64, frameName) {
     };
   }
 
+  // Normalise design system check results (may be absent if no DS checks passed in)
+  const dsChecks = Array.isArray(j.dsChecks)
+    ? j.dsChecks
+        .filter(c => c && typeof c.id === "string")
+        .map(c => ({
+          id:     c.id,
+          result: ["PASS", "FAIL", "SKIP"].includes(c.result) ? c.result : "SKIP",
+          notes:  String(c.notes ?? "").slice(0, 200),
+        }))
+    : [];
+
   return {
     frameScore: Math.max(0, Math.min(100, Math.round(j.frameScore ?? avgScore(dims)))),
     summary:    j.summary ?? "",
     dimensions: dims,
+    dsChecks,
   };
 }
 
@@ -485,4 +500,26 @@ function normStatus(s) {
 function avgScore(dims) {
   const vals = Object.values(dims).map((d) => d.score ?? 0);
   return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+}
+
+/**
+ * Builds the design system checks section to append to the vision prompt.
+ * Prioritises visual/content checks; caps at 15 to avoid token bloat.
+ */
+function buildDsPromptSection(checks) {
+  if (!checks || !checks.length) return "";
+
+  const prioritised = [
+    ...checks.filter(c => c.type === "V"),
+    ...checks.filter(c => c.type === "C"),
+    ...checks.filter(c => c.type === "S"),
+    ...checks.filter(c => c.type === "B" || c.type === "A"),
+  ].slice(0, 15);
+
+  return [
+    "",
+    "DESIGN SYSTEM CHECKS — evaluate these specific checks and add results to the dsChecks array:",
+    "For each check: PASS (clearly matches), FAIL (clearly deviates), or SKIP (not visible/applicable).",
+    ...prioritised.map(c => `${c.id}: ${c.description} — Expected: ${c.expected}`),
+  ].join("\n");
 }
